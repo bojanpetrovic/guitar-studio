@@ -62,6 +62,17 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
 - **Play mode:** controls change the sound right away, and knobs follow changes you
   make inside the plugin's own window.
 
+## Themes
+
+Click the palette button in the title bar (or press **⇧⌘T** to cycle). Six themes:
+**Amber** (default), **Midnight**, **Neon** and **Graphite** are dark; **Daylight** and **Paper**
+are light. *Match system appearance* follows macOS (Amber when dark, Daylight when light).
+The choice is an app setting, not part of a preset. Pedalboard hardware (board surfaces,
+knobs, footswitches) keeps its physical look in every theme.
+
+To add a theme, add a `:root[data-theme="…"]` palette block at the top of `src/styles.css`
+and an entry in `src/themes.ts`; everything else is derived from those tokens.
+
 ## Layout
 
 | Path | What |

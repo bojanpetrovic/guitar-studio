@@ -5,6 +5,7 @@ import { useTelemetry } from "../api";
 import Meter from "./Meter";
 import Logo from "./Logo";
 import PresetMenu from "./PresetMenu";
+import ThemeMenu from "./ThemeMenu";
 
 function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
@@ -79,6 +80,7 @@ export default function TitleBar() {
           <span className="micro-label">OUT</span>
           <Meter id="master" />
         </div>
+        <ThemeMenu />
         <button className="icon-btn" onClick={actions.openSettings} aria-label="Audio settings">
           <Settings2 size={18} />
         </button>

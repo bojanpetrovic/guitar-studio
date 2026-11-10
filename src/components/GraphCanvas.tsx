@@ -15,6 +15,7 @@ import {
 import { AlertTriangle } from "lucide-react";
 import { useStudio } from "../App";
 import { api, NodeView } from "../api";
+import { useTheme } from "../themes";
 import StudioNode from "./StudioNode";
 import SignalEdge from "./SignalEdge";
 import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER } from "./PluginBrowser";
@@ -26,6 +27,7 @@ const edgeTypes = { signal: SignalEdge };
 
 export default function GraphCanvas() {
   const { studio, catalog, layoutKey, actions } = useStudio();
+  const { theme } = useTheme();
   const { screenToFlowPosition, fitView } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -126,9 +128,9 @@ export default function GraphCanvas() {
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         minZoom={0.3}
         maxZoom={1.6}
-        colorMode="dark"
+        colorMode={theme.mode}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="rgba(255,255,255,0.08)" />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="var(--grid-dot)" />
         <Controls showInteractive={false} position="bottom-left" />
         <MiniMap
           pannable
@@ -136,9 +138,9 @@ export default function GraphCanvas() {
           position="bottom-right"
           nodeColor={(n) => {
             const kind = (n.data as { node: NodeView }).node.kind;
-            return kind === "plugin" ? "#ff9f2e" : kind === "gain" || kind === "mixer" ? "#7aa2ff" : "#3ddc97";
+            return kind === "plugin" ? "var(--accent)" : kind === "gain" || kind === "mixer" ? "var(--blue)" : "var(--green)";
           }}
-          maskColor="rgba(8,9,12,0.7)"
+          maskColor="var(--minimap-mask)"
         />
       </ReactFlow>
     </div>

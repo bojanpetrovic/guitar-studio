@@ -3,8 +3,8 @@ export default function Logo({ size = 24 }: { size?: number }) {
     <svg width={size} height={size} viewBox="0 0 1024 1024" aria-hidden>
       <defs>
         <linearGradient id="logo-pick" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#ffc24a" />
-          <stop offset="1" stopColor="#ff6a1f" />
+          <stop offset="0" style={{ stopColor: "var(--grad-a)" }} />
+          <stop offset="1" style={{ stopColor: "var(--grad-c)" }} />
         </linearGradient>
       </defs>
       <path
@@ -14,7 +14,7 @@ export default function Logo({ size = 24 }: { size?: number }) {
       <path
         d="M282 440 L 372 440 L 422 322 L 492 594 L 564 256 L 632 530 L 672 440 L 752 440"
         fill="none"
-        stroke="#14161c"
+        stroke="var(--on-accent)"
         strokeWidth="44"
         strokeLinecap="round"
         strokeLinejoin="round"

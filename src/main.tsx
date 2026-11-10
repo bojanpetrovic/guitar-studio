@@ -5,6 +5,9 @@ import "@fontsource-variable/jetbrains-mono";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 import App from "./App";
+import { initTheme } from "./themes";
+
+initTheme();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
