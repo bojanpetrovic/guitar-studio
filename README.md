@@ -61,6 +61,12 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
   one. The board also gets tap tempo, a tuner and an output meter.
 - **Play mode:** controls change the sound right away, and knobs follow changes you
   make inside the plugin's own window.
+- **Keyboard keys:** select a footswitch, knob, fader or selector and use
+  *Keyboard key* to give it a key. In play mode a switch's key stomps it (momentary
+  switches are held while the key is down). For a knob or fader, hold its key and
+  press ↑ / ↓ to turn it (⇧ for bigger steps); a selector's key steps to the next
+  position when tapped. Keys the app already uses (Space, arrows, 1–9, Esc, …)
+  can't be assigned, and a key on several controls moves them together.
 - **Stage:** playing a board shows only the board, with the tuner/metronome dock
   floating underneath. The window loses its frame and traffic lights, goes
   see-through and takes the board's shape; drag the board to move it. Move the

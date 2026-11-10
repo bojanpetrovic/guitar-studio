@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Copy, Search, Trash2, WandSparkles, Eraser } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Copy, Search, Trash2, WandSparkles, Eraser, Keyboard, X } from "lucide-react";
 import { useStudio } from "../App";
 import { nodeName, NodeView } from "../api";
 import { useResolved, useRuntime } from "./runtime";
@@ -11,6 +11,9 @@ import {
   Board,
   BoardSurface,
   ENCLOSURES,
+  KEYABLE,
+  keyLabel,
+  reservedKey,
   Widget,
   WIDGET_META,
 } from "./types";
@@ -26,6 +29,76 @@ interface Props {
 }
 
 const nodeLabel = (n: NodeView, all: NodeView[]) => nodeName(all, n.id);
+
+/** Assign a keyboard key: click, then press the key (Esc cancels). */
+function KeyField({ w, board, onKey }: { w: Widget; board: Board; onKey: (code: string | undefined) => void }) {
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!listening) return;
+    const onDown = (e: KeyboardEvent) => {
+      // Capture phase + stop: the key must not also delete / nudge / start anything.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.code === "Escape") {
+        setListening(false);
+        setError(null);
+        return;
+      }
+      if (/^(Shift|Control|Alt|Meta|OS)/.test(e.code)) return;
+      const reason = reservedKey(e.code);
+      if (reason) {
+        setError(`${keyLabel(e.code)} ${reason}. Try another key.`);
+        return;
+      }
+      setError(null);
+      setListening(false);
+      onKey(e.code);
+    };
+    const stop = () => setListening(false);
+    window.addEventListener("keydown", onDown, true);
+    window.addEventListener("blur", stop);
+    return () => {
+      window.removeEventListener("keydown", onDown, true);
+      window.removeEventListener("blur", stop);
+    };
+  }, [listening, onKey]);
+
+  const code = w.options.key;
+  const shared = code ? board.widgets.filter((x) => x.id !== w.id && x.options.key === code) : [];
+  const how =
+    w.type === "footswitch"
+      ? "Press it to stomp the switch."
+      : w.type === "selector"
+        ? "Tap it for the next position, or hold it and use ↑ / ↓."
+        : "Hold it and use ↑ / ↓ to turn (⇧ for bigger steps).";
+
+  return (
+    <div className="insp-field">
+      <span>Keyboard key</span>
+      <div className="key-assign">
+        <button className={`btn small key-assign-btn ${listening ? "listening" : ""}`} onClick={() => setListening((l) => !l)}>
+          <Keyboard size={13} />
+          {listening ? "Press a key…" : code ? <kbd className="mono">{keyLabel(code)}</kbd> : "Assign key"}
+        </button>
+        {code && !listening && (
+          <button className="icon-btn ghost mini" title="Remove key" onClick={() => onKey(undefined)}>
+            <X size={12} />
+          </button>
+        )}
+      </div>
+      {error ? (
+        <small className="key-error">{error}</small>
+      ) : (
+        <small className="muted">
+          {listening ? "Esc to cancel." : code ? `${how} Works in play mode.` : "Play this control from the keyboard."}
+          {shared.length > 0 && ` Also on ${shared.map((x) => x.label || x.type).join(", ")}: they move together.`}
+        </small>
+      )}
+    </div>
+  );
+}
 
 /** Which rig nodes make sense for a binding kind. */
 function candidates(kind: BindingKind, nodes: NodeView[]) {
@@ -198,6 +271,8 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
           ))}
         </div>
       </div>
+
+      {KEYABLE.includes(w.type) && <KeyField w={w} board={board} onKey={(key) => setOpt({ key })} />}
 
       {w.type === "label" && (
         <NumberField label="Text size" value={w.options.fontSize} onChange={(v) => setOpt({ fontSize: v })} />

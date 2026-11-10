@@ -1,8 +1,8 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { meterLevel, useTelemetry } from "../api";
 import { useStudio } from "../App";
 import { Resolved, useResolved } from "./runtime";
-import { Widget } from "./types";
+import { keyLabel, Widget } from "./types";
 
 interface Props {
   w: Widget;
@@ -35,6 +35,100 @@ function useDrag(r: Resolved, editing: boolean) {
   };
 }
 
+// ---------------------------------------------------------------- keyboard
+
+type KeyMode =
+  | { kind: "switch"; momentary: boolean }
+  /** Knob / fader: hold the key, ↑ / ↓ to adjust. Selector: same, and a tap steps on. */
+  | { kind: "dial"; positions?: number };
+
+/** Nudge per ↑ / ↓ press for continuous controls (⇧ for coarse). */
+const KEY_STEP = 0.01;
+const KEY_STEP_COARSE = 0.05;
+
+/**
+ * Plays a control from its assigned key while the board is in play mode. Listens on
+ * `document` so a held control claims ↑ / ↓ before the window-level tempo keys (they
+ * skip events that are already handled). Returns whether the key is held down.
+ */
+function useControlKey(w: Widget, r: Resolved, editing: boolean, mode: KeyMode) {
+  const code = w.options.key;
+  const latest = useRef(r);
+  latest.current = r;
+  const [held, setHeld] = useState(false);
+  const momentary = mode.kind === "switch" && mode.momentary;
+  const positions = mode.kind === "dial" ? (mode.positions ?? 0) : 0;
+  const kind = mode.kind;
+
+  useEffect(() => {
+    if (!code || editing) return;
+    let down = false;
+    let moved = false;
+    let norm = 0;
+    const typing = (e: KeyboardEvent) => !!(e.target as HTMLElement | null)?.closest?.("input, textarea, select");
+
+    const let_go = () => {
+      if (!down) return;
+      down = false;
+      setHeld(false);
+      const r = latest.current;
+      if (!r.ok) return;
+      if (kind === "switch" && momentary) r.release();
+      // A selector tapped without ↑ / ↓ steps to its next position.
+      if (positions > 1 && !moved) {
+        const i = Math.round(r.norm * (positions - 1));
+        r.setNorm(((i + 1) % positions) / (positions - 1));
+      }
+    };
+    const onDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
+      const r = latest.current;
+      if (e.code === code) {
+        e.preventDefault();
+        if (e.repeat || down) return;
+        down = true;
+        moved = false;
+        norm = r.norm;
+        setHeld(true);
+        if (kind === "switch" && r.ok) {
+          if (momentary) r.press();
+          else r.toggle();
+        }
+        return;
+      }
+      if (down && kind === "dial" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        if (!r.ok) return;
+        const discrete = positions > 1 ? positions - 1 : r.steps;
+        const step = discrete > 0 ? 1 / discrete : e.shiftKey ? KEY_STEP_COARSE : KEY_STEP;
+        norm = clamp01(norm + (e.key === "ArrowUp" ? step : -step));
+        moved = true;
+        r.setNorm(norm);
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === code) let_go();
+    };
+    document.addEventListener("keydown", onDown);
+    document.addEventListener("keyup", onUp);
+    window.addEventListener("blur", let_go);
+    return () => {
+      document.removeEventListener("keydown", onDown);
+      document.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", let_go);
+      let_go();
+    };
+  }, [code, editing, kind, momentary, positions]);
+
+  return held;
+}
+
+/** The little key badge in a control's corner. */
+function KeyCap({ code, held }: { code?: string; held: boolean }) {
+  if (!code) return null;
+  return <span className={`pb-keycap mono ${held ? "held" : ""}`}>{keyLabel(code)}</span>;
+}
+
 // ---------------------------------------------------------------- footswitch
 
 function Footswitch({ w, editing }: Props) {
@@ -54,10 +148,15 @@ function Footswitch({ w, editing }: Props) {
   const up = () => {
     if (!editing && r.ok && w.options.momentary && !isTap) r.release();
   };
+  const held = useControlKey(w, r, editing, { kind: "switch", momentary: !!w.options.momentary && !isTap });
   const size = Math.min(w.w * 0.62, w.h * 0.46);
 
   return (
-    <div className={`pb-footswitch ${r.ok ? "" : "unbound"}`} style={{ "--accent": w.color } as React.CSSProperties}>
+    <div
+      className={`pb-footswitch ${r.ok ? "" : "unbound"} ${held ? "key-held" : ""}`}
+      style={{ "--accent": w.color } as React.CSSProperties}
+    >
+      <KeyCap code={w.options.key} held={held} />
       <span key={pulsing ? beat : "led"} className={`pb-led ${!isTap && r.on ? "on" : ""} ${pulsing ? "pulse" : ""}`} />
       <button
         className="pb-stomp"
@@ -91,6 +190,7 @@ function arcPath(cx: number, cy: number, r: number, a0: number, a1: number) {
 function Knob({ w, editing }: Props) {
   const r = useResolved(w);
   const drag = useDrag(r, editing);
+  const held = useControlKey(w, r, editing, { kind: "dial" });
   const size = Math.max(40, Math.min(w.w - 8, w.h - 44));
   const c = size / 2;
   const rad = c - 5;
@@ -98,7 +198,8 @@ function Knob({ w, editing }: Props) {
   const a = a0 + r.norm * KNOB_SWEEP;
 
   return (
-    <div className={`pb-knob ${r.ok ? "" : "unbound"}`} style={{ "--accent": w.color } as React.CSSProperties}>
+    <div className={`pb-knob ${r.ok ? "" : "unbound"} ${held ? "key-held" : ""}`} style={{ "--accent": w.color } as React.CSSProperties}>
+      <KeyCap code={w.options.key} held={held} />
       <svg width={size} height={size} className="pb-knob-svg" {...drag}>
         <path d={arcPath(c, c, rad, a0, a0 + KNOB_SWEEP)} className="pb-arc-track" />
         {r.ok && r.norm > 0.001 && <path d={arcPath(c, c, rad, a0, a)} className="pb-arc-value" />}
@@ -117,6 +218,7 @@ function Knob({ w, editing }: Props) {
 
 function Fader({ w, editing }: Props) {
   const r = useResolved(w);
+  const held = useControlKey(w, r, editing, { kind: "dial" });
   const track = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const setFromY = (clientY: number) => {
@@ -125,7 +227,8 @@ function Fader({ w, editing }: Props) {
   };
 
   return (
-    <div className={`pb-fader ${r.ok ? "" : "unbound"}`} style={{ "--accent": w.color } as React.CSSProperties}>
+    <div className={`pb-fader ${r.ok ? "" : "unbound"} ${held ? "key-held" : ""}`} style={{ "--accent": w.color } as React.CSSProperties}>
+      <KeyCap code={w.options.key} held={held} />
       <div
         ref={track}
         className="pb-fader-track"
@@ -161,9 +264,11 @@ function Selector({ w, editing }: Props) {
         : ["A", "B", "C"];
   const n = labels.length;
   const active = Math.round(r.norm * (n - 1));
+  const held = useControlKey(w, r, editing, { kind: "dial", positions: n });
 
   return (
-    <div className={`pb-selector ${r.ok ? "" : "unbound"}`} style={{ "--accent": w.color } as React.CSSProperties}>
+    <div className={`pb-selector ${r.ok ? "" : "unbound"} ${held ? "key-held" : ""}`} style={{ "--accent": w.color } as React.CSSProperties}>
+      <KeyCap code={w.options.key} held={held} />
       <span className="pb-caption">{w.label}</span>
       <div className="pb-sel-list">
         {labels.map((l, i) => (

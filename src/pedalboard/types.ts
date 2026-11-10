@@ -31,6 +31,11 @@ export interface WidgetOptions {
   labels?: string[];
   /** Label: text size in px. */
   fontSize?: number;
+  /**
+   * Keyboard key (KeyboardEvent.code, e.g. "KeyA") that plays this control in play
+   * mode: switches press, knobs / faders / selectors are held and nudged with ↑ / ↓.
+   */
+  key?: string;
 }
 
 export interface Widget {
@@ -135,3 +140,39 @@ export const snap = (v: number) => Math.round(v / GRID) * GRID;
 
 /** Panels render underneath everything else. */
 export const drawOrder = (ws: Widget[]) => [...ws.filter((w) => w.type === "panel"), ...ws.filter((w) => w.type !== "panel")];
+
+// ---------------------------------------------------------------- keyboard keys
+
+/** Controls a key can be assigned to. */
+export const KEYABLE: WidgetType[] = ["footswitch", "knob", "fader", "selector"];
+
+/** Keys the app already uses everywhere (code → what for). */
+export function reservedKey(code: string): string | null {
+  if (code === "Space") return "starts / stops the metronome";
+  if (code === "ArrowUp" || code === "ArrowDown") return "tempo, and adjusting a held control";
+  if (["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "BracketLeft", "BracketRight"].includes(code))
+    return "switches presets on stage";
+  if (/^(Digit|Numpad)[1-9]$/.test(code)) return "switches scenes";
+  if (code === "Escape") return "leaves the stage";
+  if (["Tab", "Enter", "NumpadEnter", "Backspace", "Delete"].includes(code)) return "used for editing";
+  if (/^(Shift|Control|Alt|Meta|OS|CapsLock|Fn)/.test(code)) return "a modifier key";
+  return null;
+}
+
+/** Short label for a key code ("KeyA" → "A", "Digit0" → "0", "Semicolon" → ";"). */
+export function keyLabel(code: string): string {
+  const named: Record<string, string> = {
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Backslash: "\\",
+    Minus: "-",
+    Equal: "=",
+    Backquote: "`",
+    IntlBackslash: "§",
+  };
+  if (named[code]) return named[code];
+  return code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "Num ");
+}
