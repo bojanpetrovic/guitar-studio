@@ -103,6 +103,28 @@ export interface Telemetry {
   tuner: TunerReading | null;
 }
 
+export interface PresetInfo {
+  name: string;
+  savedAt: number;
+  plugins: string[];
+}
+
+export interface PresetList {
+  presets: PresetInfo[];
+  current: string | null;
+  last: string | null;
+  dir: string;
+}
+
+export interface PresetLoad {
+  studio: StudioView;
+  presets: PresetList;
+  warnings: string[];
+}
+
+/** Error string the backend returns when a save would replace another preset. */
+export const PRESET_EXISTS = "PRESET_EXISTS";
+
 // ---------------------------------------------------------------- commands
 
 export const api = {
@@ -125,6 +147,14 @@ export const api = {
   setMetronome: (settings: MetronomeSettings) => invoke<void>("set_metronome", { settings }),
   setTuner: (enabled: boolean, referenceA4?: number) =>
     invoke<void>("set_tuner", { enabled, referenceA4: referenceA4 ?? null }),
+
+  listPresets: () => invoke<PresetList>("list_presets"),
+  savePreset: (name: string, overwrite = false) =>
+    invoke<[PresetList, string[]]>("save_preset", { name, overwrite }),
+  loadPreset: (name: string) => invoke<PresetLoad>("load_preset", { name }),
+  newPreset: () => invoke<PresetLoad>("new_preset"),
+  deletePreset: (name: string) => invoke<PresetList>("delete_preset", { name }),
+  renamePreset: (from: string, to: string) => invoke<PresetList>("rename_preset", { from, to }),
 };
 
 // ---------------------------------------------------------------- telemetry store

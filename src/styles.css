@@ -99,6 +99,8 @@ select {
 
 .titlebar {
   grid-area: title;
+  position: relative;
+  z-index: 20; /* keep the preset popover above the canvas */
   display: flex;
   align-items: center;
   gap: 16px;
@@ -1191,4 +1193,187 @@ select {
 .toast .icon-btn {
   width: 22px;
   height: 22px;
+}
+
+/* ============================================================ presets */
+.preset {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+}
+.preset-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  max-width: 260px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.preset-trigger:hover,
+.preset-trigger.open {
+  border-color: var(--line-2);
+  background: var(--panel-2);
+}
+.preset-trigger > svg:first-child {
+  color: var(--accent);
+  flex: none;
+}
+.preset-name {
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preset-trigger .chev {
+  color: var(--muted);
+  flex: none;
+  transition: transform 0.15s;
+}
+.preset-trigger.open .chev {
+  transform: rotate(180deg);
+}
+
+.popover {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 8px);
+  left: 0;
+  border-radius: 14px;
+  background: rgba(22, 25, 32, 0.96);
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(20px);
+  animation: pop 0.14s ease-out;
+}
+.preset-pop {
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+}
+.pop-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px 6px;
+  font-size: 12px;
+}
+.preset-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+.pop-empty {
+  padding: 18px 10px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.5;
+}
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 9px;
+  cursor: pointer;
+  outline: none;
+}
+.preset-row:hover,
+.preset-row:focus-visible {
+  background: var(--panel-3);
+}
+.preset-row.active .preset-row-name {
+  color: var(--accent);
+}
+.preset-check {
+  width: 14px;
+  color: var(--accent);
+  flex: none;
+  display: grid;
+}
+.preset-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.preset-row-name {
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preset-chain {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.preset-row:hover .row-actions,
+.preset-row:focus-within .row-actions {
+  opacity: 1;
+}
+.row-actions .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+.pop-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+}
+.pop-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pop-warn {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.text-input {
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line-2);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.text-input:focus {
+  border-color: rgba(255, 166, 48, 0.5);
+  box-shadow: 0 0 0 3px rgba(255, 166, 48, 0.12);
+}
+.btn.danger {
+  background: rgba(255, 93, 93, 0.14);
+  border-color: rgba(255, 93, 93, 0.4);
+  color: #ffb3b3;
+}
+.btn.danger:hover:not(:disabled) {
+  background: rgba(255, 93, 93, 0.22);
 }

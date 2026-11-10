@@ -9,3 +9,7 @@ license = "MIT"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Local fixes to upstream crates (see vendor/README.md).
+[patch.crates-io]
+truce-rack-vst3 = { path = "vendor/truce-rack-vst3" }

@@ -1,7 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ReactFlowProvider } from "@xyflow/react";
-import { api, Catalog, nextFrame, PluginDescriptor, pluginKey, StudioView } from "./api";
+import {
+  api,
+  Catalog,
+  nextFrame,
+  PluginDescriptor,
+  pluginKey,
+  PRESET_EXISTS,
+  PresetList,
+  PresetLoad,
+  StudioView,
+} from "./api";
 import TitleBar from "./components/TitleBar";
 import PluginBrowser from "./components/PluginBrowser";
 import GraphCanvas from "./components/GraphCanvas";
@@ -25,11 +35,20 @@ export interface StudioActions {
   apply: (v: StudioView) => void;
   openSettings: () => void;
   toast: (message: string, kind?: Toast["kind"]) => number;
+  loadPreset: (name: string) => Promise<void>;
+  /** Resolves to "exists" when the name belongs to another preset and overwrite is false. */
+  savePreset: (name: string, overwrite?: boolean) => Promise<"ok" | "exists" | "error">;
+  newPreset: () => Promise<void>;
+  deletePreset: (name: string) => Promise<void>;
+  renamePreset: (from: string, to: string) => Promise<boolean>;
 }
 
 interface Ctx {
   studio: StudioView;
   catalog: Catalog;
+  presets: PresetList;
+  /** Bumps whenever a whole rig is swapped in, so the canvas can re-fit. */
+  layoutKey: number;
   actions: StudioActions;
 }
 
@@ -45,6 +64,8 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog>({ plugins: [], errors: [], scannedAt: null, scanning: false });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [presets, setPresets] = useState<PresetList>({ presets: [], current: null, last: null, dir: "" });
+  const [layoutKey, setLayoutKey] = useState(0);
   const toastId = useRef(1);
   const studioRef = useRef<StudioView | null>(null);
   studioRef.current = studio;
@@ -72,8 +93,41 @@ export default function App() {
     [toast],
   );
 
+  /** Apply a whole-rig swap (preset load / new). */
+  const applyLoad = useCallback(
+    (res: PresetLoad) => {
+      setStudio(res.studio);
+      setPresets(res.presets);
+      setLayoutKey((k) => k + 1);
+      res.warnings.forEach((w) => toast(w, "error"));
+    },
+    [toast],
+  );
+
+  const loadPresetNow = useCallback(
+    async (name: string) => {
+      const loading = toast(`Loading “${name}”…`, "loading");
+      await nextFrame(); // let the toast paint: plugins load on the main thread
+      try {
+        applyLoad(await api.loadPreset(name));
+      } catch (e) {
+        toast(String(e), "error");
+      } finally {
+        dismiss(loading);
+      }
+    },
+    [toast, dismiss, applyLoad],
+  );
+
   useEffect(() => {
-    api.getStudio().then(setStudio);
+    // On launch, bring back the rig that was active last time (only into a blank studio,
+    // so a dev hot-reload doesn't clobber work in progress).
+    Promise.all([api.getStudio(), api.listPresets()]).then(([s, p]) => {
+      setStudio(s);
+      setPresets(p);
+      const blank = s.nodes.length <= 2;
+      if (blank && !p.current && p.last && p.presets.some((x) => x.name === p.last)) loadPresetNow(p.last);
+    });
     api.getCatalog().then(setCatalog);
     const un = listen<Catalog>("catalog", (e) => setCatalog(e.payload));
     return () => {
@@ -150,6 +204,36 @@ export default function App() {
         await nextFrame();
         await guard(() => api.openEditor(id));
       },
+      loadPreset: loadPresetNow,
+      savePreset: async (name, overwrite = false) => {
+        try {
+          const [list, warnings] = await api.savePreset(name, overwrite);
+          setPresets(list);
+          warnings.forEach((w) => toast(w, "error"));
+          toast(`Saved “${list.current}”`, "success");
+          return "ok";
+        } catch (e) {
+          if (String(e) === PRESET_EXISTS) return "exists";
+          toast(String(e), "error");
+          return "error";
+        }
+      },
+      newPreset: async () => {
+        const res = await guard(() => api.newPreset());
+        if (res) applyLoad(res);
+      },
+      deletePreset: async (name) => {
+        const list = await guard(() => api.deletePreset(name));
+        if (list) {
+          setPresets(list);
+          toast(`Deleted “${name}”`, "info");
+        }
+      },
+      renamePreset: async (from, to) => {
+        const list = await guard(() => api.renamePreset(from, to));
+        if (list) setPresets(list);
+        return !!list;
+      },
       scan: async () => {
         const c = await guard(() => api.scanPlugins());
         if (c) {
@@ -158,13 +242,13 @@ export default function App() {
         }
       },
     }),
-    [toast, guard, dismiss, appendToChain, chainPosition],
+    [toast, guard, dismiss, appendToChain, chainPosition, loadPresetNow, applyLoad],
   );
 
   if (!studio) return <div className="boot">Starting audio engine…</div>;
 
   return (
-    <StudioContext.Provider value={{ studio, catalog, actions }}>
+    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, actions }}>
       <ReactFlowProvider>
         <div className="app">
           <TitleBar />

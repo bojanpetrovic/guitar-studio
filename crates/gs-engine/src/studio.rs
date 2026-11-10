@@ -5,12 +5,13 @@ use crate::graph::{NodeId, Schedule, Step, topo_order};
 use crate::metronome::{MetronomeSettings, MetronomeShared};
 use crate::nodes::{GainNode, InputNode, MAX_BLOCK, NodeShared, PluginNode, Processor};
 use crate::plugins::{self, PluginDescriptor, PluginSlot, SharedPlugin};
+use crate::presets::{self, Patch, PatchNode};
 use crate::tuner::{self, TunerReading, TunerShared, TunerThread};
 use crate::util::db_to_gain;
 use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -209,7 +210,20 @@ impl Studio {
         plugin: Option<SharedPlugin>,
     ) -> NodeId {
         let id = self.next_id;
-        self.next_id += 1;
+        self.insert_node_with_id(id, kind, x, y, gain_db, plugin);
+        id
+    }
+
+    fn insert_node_with_id(
+        &mut self,
+        id: NodeId,
+        kind: NodeType,
+        x: f32,
+        y: f32,
+        gain_db: f32,
+        plugin: Option<SharedPlugin>,
+    ) {
+        self.next_id = self.next_id.max(id + 1);
         let shared = NodeShared::new(db_to_gain(gain_db));
         self.nodes.insert(
             id,
@@ -222,7 +236,6 @@ impl Studio {
                 plugin,
             },
         );
-        id
     }
 
     pub fn add_gain_node(&mut self, x: f32, y: f32) -> Result<NodeId> {
@@ -365,6 +378,169 @@ impl Studio {
         audio.send_schedule(Schedule::new(steps))
     }
 
+    // ------------------------------------------------------------------ presets
+
+    pub fn plugin_node_ids(&self) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .filter(|(_, n)| n.plugin.is_some())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Capture the current rig. Plugin states are read from each plugin (briefly
+    /// locking it); failures are returned as warnings rather than aborting the save.
+    pub fn to_patch(&self, name: &str) -> (Patch, Vec<String>) {
+        let mut warnings = Vec::new();
+        let nodes = self
+            .nodes
+            .iter()
+            .map(|(id, n)| {
+                let (plugin, state) = match &n.plugin {
+                    Some(p) => {
+                        let slot = p.lock();
+                        let state = match slot.plugin.save_state() {
+                            Ok(bytes) => Some(Patch::encode_state(&bytes)),
+                            Err(e) => {
+                                warnings.push(format!(
+                                    "{}: settings couldn't be saved ({e})",
+                                    slot.descriptor.name
+                                ));
+                                None
+                            }
+                        };
+                        (Some(slot.descriptor.clone()), state)
+                    }
+                    None => (None, None),
+                };
+                PatchNode {
+                    id: *id,
+                    kind: n.kind,
+                    x: n.x,
+                    y: n.y,
+                    gain_db: n.gain_db,
+                    bypass: n.shared.bypass.load(Ordering::Relaxed),
+                    channel: n.shared.channel.load(Ordering::Relaxed),
+                    plugin,
+                    state,
+                }
+            })
+            .collect();
+        let patch = Patch {
+            format: presets::FORMAT_TAG.into(),
+            version: presets::FORMAT_VERSION,
+            name: name.into(),
+            saved_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            metronome: Some(MetronomeSettings {
+                enabled: false,
+                ..self.metronome.settings()
+            }),
+            nodes,
+            edges: self.edges.clone(),
+        };
+        (patch, warnings)
+    }
+
+    /// Replace the whole graph with `patch`. `slots` holds the patch's plugins,
+    /// already loaded by [`presets::instantiate_plugins`]; plugin nodes without a slot
+    /// (missing plugins) are dropped along with their cables. Returns the previous
+    /// plugins so the caller can release them on the main thread.
+    pub fn apply_patch(
+        &mut self,
+        patch: &Patch,
+        mut slots: HashMap<NodeId, PluginSlot>,
+    ) -> Result<Vec<SharedPlugin>> {
+        let old: Vec<SharedPlugin> = std::mem::take(&mut self.nodes)
+            .into_values()
+            .filter_map(|n| n.plugin)
+            .collect();
+        self.edges.clear();
+        self.next_id = 1;
+
+        let (mut have_input, mut have_output) = (false, false);
+        for n in &patch.nodes {
+            let plugin = match n.kind {
+                NodeType::Plugin => match slots.remove(&n.id) {
+                    Some(slot) => Some(Arc::new(Mutex::new(slot))),
+                    None => continue,
+                },
+                NodeType::Input if have_input => continue,
+                NodeType::Output if have_output => continue,
+                _ => None,
+            };
+            have_input |= n.kind == NodeType::Input;
+            have_output |= n.kind == NodeType::Output;
+            self.insert_node_with_id(n.id, n.kind, n.x, n.y, n.gain_db, plugin);
+            let shared = &self.nodes[&n.id].shared;
+            shared.bypass.store(n.bypass, Ordering::Relaxed);
+            shared.channel.store(n.channel, Ordering::Relaxed);
+            if n.kind == NodeType::Input {
+                self.tuner_channel.store(n.channel, Ordering::Relaxed);
+            }
+        }
+        if !have_input {
+            self.insert_node(NodeType::Input, 0.0, 0.0, 0.0, None);
+        }
+        if !have_output {
+            self.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
+        }
+
+        // Re-add cables through `connect`'s rules; anything invalid is skipped.
+        let audio = self.audio.take(); // avoid one schedule per cable
+        for &(from, to) in &patch.edges {
+            let _ = self.connect(from, to);
+        }
+        self.audio = audio;
+
+        if let Some(m) = &patch.metronome {
+            self.metronome.apply(&MetronomeSettings {
+                enabled: self.metronome.settings().enabled,
+                ..*m
+            });
+        }
+        self.rebuild()?;
+        Ok(old)
+    }
+
+    /// Back to a blank `Input → Output` rig.
+    pub fn reset_graph(&mut self) -> Result<Vec<SharedPlugin>> {
+        let blank = Patch {
+            format: presets::FORMAT_TAG.into(),
+            version: presets::FORMAT_VERSION,
+            name: String::new(),
+            saved_at: 0,
+            metronome: None,
+            nodes: vec![
+                PatchNode {
+                    id: 1,
+                    kind: NodeType::Input,
+                    x: 0.0,
+                    y: 0.0,
+                    gain_db: 0.0,
+                    bypass: false,
+                    channel: 0,
+                    plugin: None,
+                    state: None,
+                },
+                PatchNode {
+                    id: 2,
+                    kind: NodeType::Output,
+                    x: 600.0,
+                    y: 0.0,
+                    gain_db: 0.0,
+                    bypass: false,
+                    channel: 0,
+                    plugin: None,
+                    state: None,
+                },
+            ],
+            edges: vec![(1, 2)],
+        };
+        self.apply_patch(&blank, HashMap::new())
+    }
+
     // ------------------------------------------------------------- metronome / tuner
 
     pub fn set_metronome(&mut self, settings: MetronomeSettings) {
@@ -445,6 +621,62 @@ mod tests {
     #[test]
     fn studio_is_send() {
         assert_send::<Studio>();
+    }
+
+    #[test]
+    fn patch_round_trip_restores_graph() {
+        let mut s = Studio::new();
+        let g = s.add_gain_node(300.0, 50.0).unwrap();
+        s.set_param(g, "gainDb", -6.0).unwrap();
+        s.set_bypass(g, true).unwrap();
+        s.set_param(1, "channel", 2.0).unwrap();
+        s.disconnect(1, 2).unwrap();
+        s.connect(1, g).unwrap();
+        s.connect(g, 2).unwrap();
+        let (patch, warnings) = s.to_patch("Test");
+        assert!(warnings.is_empty());
+
+        // Survives JSON, then loads into a fresh studio.
+        let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap();
+        let v = t.view();
+        let gain = v.nodes.iter().find(|n| n.kind == NodeType::Gain).unwrap();
+        assert_eq!((gain.x, gain.gain_db, gain.bypass), (300.0, -6.0, true));
+        assert_eq!(
+            v.nodes
+                .iter()
+                .find(|n| n.kind == NodeType::Input)
+                .unwrap()
+                .channel,
+            2
+        );
+        let edges: Vec<_> = v.edges.iter().map(|e| (e.from, e.to)).collect();
+        assert_eq!(edges, vec![(1, gain.id), (gain.id, 2)]);
+        // New nodes don't collide with restored ids.
+        assert!(t.add_gain_node(0.0, 0.0).unwrap() > gain.id);
+    }
+
+    #[test]
+    fn missing_plugins_are_dropped_with_their_cables() {
+        let mut s = Studio::new();
+        let (mut patch, _) = s.to_patch("x");
+        patch.nodes.push(PatchNode {
+            id: 9,
+            kind: NodeType::Plugin,
+            x: 0.0,
+            y: 0.0,
+            gain_db: 0.0,
+            bypass: false,
+            channel: 0,
+            plugin: None,
+            state: None,
+        });
+        patch.edges = vec![(1, 9), (9, 2)];
+        s.apply_patch(&patch, HashMap::new()).unwrap();
+        let v = s.view();
+        assert_eq!(v.nodes.len(), 2);
+        assert!(v.edges.is_empty());
     }
 
     #[test]

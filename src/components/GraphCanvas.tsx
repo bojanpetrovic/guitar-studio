@@ -25,8 +25,8 @@ const nodeTypes = { studio: StudioNode };
 const edgeTypes = { signal: SignalEdge };
 
 export default function GraphCanvas() {
-  const { studio, catalog, actions } = useStudio();
-  const { screenToFlowPosition } = useReactFlow();
+  const { studio, catalog, layoutKey, actions } = useStudio();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
@@ -62,6 +62,12 @@ export default function GraphCanvas() {
       }),
     );
   }, [studio.edges, setEdges]);
+
+  useEffect(() => {
+    if (!layoutKey) return;
+    const t = setTimeout(() => fitView({ padding: 0.3, maxZoom: 1, duration: 300 }), 60);
+    return () => clearTimeout(t);
+  }, [layoutKey, fitView]);
 
   const onConnect = useCallback((c: Connection) => actions.connect(Number(c.source), Number(c.target)), [actions]);
 

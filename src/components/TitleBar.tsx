@@ -3,6 +3,7 @@ import { useStudio } from "../App";
 import { useTelemetry } from "../api";
 import Meter from "./Meter";
 import Logo from "./Logo";
+import PresetMenu from "./PresetMenu";
 
 function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
@@ -25,6 +26,7 @@ export default function TitleBar() {
         <Logo size={22} />
         <span className="brand-name">Guitar Studio</span>
       </div>
+      <PresetMenu />
 
       <div className="titlebar-center" data-tauri-drag-region>
         <button className={`chip audio-chip ${a ? "ok" : "bad"}`} onClick={actions.openSettings}>

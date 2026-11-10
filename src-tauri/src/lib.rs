@@ -1,4 +1,5 @@
 mod editor;
+mod presets;
 
 use gs_engine::Studio;
 use gs_engine::audio::{self, AudioConfig, DeviceList};
@@ -36,6 +37,9 @@ pub struct AppState {
     /// final drop happens on the main thread (AU / VST3 teardown expects that).
     graveyard: Mutex<Vec<SharedPlugin>>,
     data_dir: PathBuf,
+    presets: gs_engine::presets::PresetStore,
+    /// Name of the preset the current rig was loaded from / last saved as.
+    current_preset: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -236,11 +240,14 @@ pub fn run() {
                 log::error!("audio failed to start: {e:#}");
             }
             let studio = Arc::new(Mutex::new(studio));
+            let presets = gs_engine::presets::PresetStore::new(data_dir.join("presets"))?;
             app.manage(AppState {
                 studio: studio.clone(),
                 catalog: Mutex::new(catalog),
                 graveyard: Mutex::new(Vec::new()),
                 data_dir,
+                presets,
+                current_preset: Mutex::new(None),
             });
 
             // Telemetry pump: meters, tuner and metronome beat at ~30 Hz.
@@ -283,6 +290,12 @@ pub fn run() {
             open_editor,
             set_metronome,
             set_tuner,
+            presets::list_presets,
+            presets::save_preset,
+            presets::load_preset,
+            presets::new_preset,
+            presets::delete_preset,
+            presets::rename_preset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Guitar Studio");
