@@ -61,6 +61,11 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
   one. The board also gets tap tempo, a tuner and an output meter.
 - **Play mode:** controls change the sound right away, and knobs follow changes you
   make inside the plugin's own window.
+- **Stage:** playing a board shows only the board. The window loses its frame and
+  traffic lights, goes see-through and takes the board's shape; drag the board to
+  move it. Move the mouse to bring up a small bar with the preset name (← / → or the
+  arrows switch presets), **Edit** and **Rig**. ⌘E, Esc or ⌘1 also leave the stage,
+  and the window goes back to its old size and place.
 
 ## Themes
 

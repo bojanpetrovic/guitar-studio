@@ -1304,6 +1304,7 @@ dependencies = [
  "anyhow",
  "gs-engine",
  "log",
+ "objc2-app-kit",
  "parking_lot 0.13.0",
  "serde",
  "serde_json",

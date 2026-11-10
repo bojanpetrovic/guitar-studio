@@ -100,9 +100,25 @@ function apply(theme: Theme, animate: boolean) {
   // Native window: background shows during resizes/startup, theme drives macOS chrome.
   if ("__TAURI_INTERNALS__" in window) {
     const win = getCurrentWindow();
-    win.setBackgroundColor(theme.swatch.bg).catch(() => {});
+    syncWindowBackground();
     win.setTheme(theme.mode).catch(() => {});
   }
+}
+
+/** Stage mode makes the window see-through so the pedalboard floats on the desktop. */
+let windowTransparent = false;
+
+function syncWindowBackground() {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const color: string | [number, number, number, number] = windowTransparent ? [0, 0, 0, 0] : state.theme.swatch.bg;
+  getCurrentWindow()
+    .setBackgroundColor(color)
+    .catch(() => {});
+}
+
+export function setWindowTransparent(on: boolean) {
+  windowTransparent = on;
+  syncWindowBackground();
 }
 
 function update(choice: ThemeChoice, animate: boolean) {

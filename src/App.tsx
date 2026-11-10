@@ -22,6 +22,7 @@ import MetronomePanel from "./components/MetronomePanel";
 import SettingsDialog from "./components/SettingsDialog";
 import Toasts, { Toast } from "./components/Toasts";
 import PedalboardView from "./pedalboard/PedalboardView";
+import { recoverFrame } from "./stageWindow";
 
 type Pos = { x: number; y: number };
 
@@ -52,6 +53,8 @@ export interface StudioActions {
   /** Replace the pedalboard layout (kept locally and mirrored to the engine). */
   updateBoard: (board: unknown) => void;
   setView: (view: View) => void;
+  /** The pedalboard is being played full-window (frameless); hide the studio chrome. */
+  setStage: (on: boolean) => void;
 }
 
 export type View = "rig" | "board";
@@ -63,6 +66,7 @@ interface Ctx {
   /** Bumps whenever a whole rig is swapped in, so the canvas can re-fit. */
   layoutKey: number;
   view: View;
+  stage: boolean;
   actions: StudioActions;
 }
 
@@ -81,6 +85,7 @@ export default function App() {
   const [presets, setPresets] = useState<PresetList>({ presets: [], current: null, last: null, dir: "" });
   const [layoutKey, setLayoutKey] = useState(0);
   const [view, setView] = useState<View>("rig");
+  const [stage, setStage] = useState(false);
   const taps = useRef<number[]>([]);
   const toastId = useRef(1);
   const studioRef = useRef<StudioView | null>(null);
@@ -140,7 +145,13 @@ export default function App() {
     [toast, dismiss, applyLoad],
   );
 
+  // html/body must go see-through too while the board is on stage.
   useEffect(() => {
+    document.documentElement.classList.toggle("stage-mode", stage);
+  }, [stage]);
+
+  useEffect(() => {
+    recoverFrame();
     // On launch, bring back the rig that was active last time (only into a blank studio,
     // so a dev hot-reload doesn't clobber work in progress).
     Promise.all([api.getStudio(), api.listPresets()]).then(([s, p]) => {
@@ -314,6 +325,7 @@ export default function App() {
         api.setPedalboard(board).catch((e) => toast(String(e), "error"));
       },
       setView,
+      setStage,
       scan: async () => {
         const c = await guard(() => api.scanPlugins());
         if (c) {
@@ -328,9 +340,9 @@ export default function App() {
   if (!studio) return <div className="boot">Starting audio engine…</div>;
 
   return (
-    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, actions }}>
+    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, stage, actions }}>
       <ReactFlowProvider>
-        <div className={`app view-${view}`}>
+        <div className={`app view-${view} ${stage ? "stage-mode" : ""}`}>
           <TitleBar />
           <aside className="sidebar left">
             <PluginBrowser />

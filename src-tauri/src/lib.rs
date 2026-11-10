@@ -222,6 +222,34 @@ fn open_editor(app: AppHandle, state: State<AppState>, id: u32) -> CmdResult<()>
     editor::open(&app, &state, id).map_err(|e| format!("{e:#}"))
 }
 
+/// Show or hide the macOS close / minimise / zoom buttons. Stage mode hides them so the
+/// window looks frameless. (We keep the native frame itself: taking decorations away
+/// makes tao's traffic-light positioning panic on the next resize.)
+#[tauri::command]
+fn set_window_buttons(window: tauri::WebviewWindow, visible: bool) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSWindow, NSWindowButton};
+        let ptr = window.ns_window().map_err(err)?;
+        // SAFETY: Tauri hands us the live NSWindow of this webview window, and sync
+        // commands run on the main thread, where AppKit must be called.
+        let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        for kind in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(button) = ns.standardWindowButton(kind) {
+                button.setHidden(!visible);
+            }
+        }
+        ns.invalidateShadow();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, visible);
+    Ok(())
+}
+
 // ---------------------------------------------------------------- pedalboard
 
 #[tauri::command]
@@ -340,6 +368,7 @@ pub fn run() {
             set_bypass,
             move_node,
             open_editor,
+            set_window_buttons,
             set_metronome,
             set_tuner,
             plugin_params,

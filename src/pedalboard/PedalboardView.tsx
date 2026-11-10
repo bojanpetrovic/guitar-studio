@@ -11,12 +11,16 @@ import {
   Type,
   AudioWaveform,
   WandSparkles,
+  ChevronLeft,
+  ChevronRight,
+  Workflow,
 } from "lucide-react";
 import { useStudio } from "../App";
 import { api, nodeName, NodeView, ParamInfo } from "../api";
 import Inspector from "./Inspector";
 import { RuntimeContext, useParamRuntime } from "./runtime";
 import { WidgetView } from "./widgets";
+import { enterStage, exitStage } from "../stageWindow";
 import {
   ACCENTS,
   Board,
@@ -79,6 +83,74 @@ function chainOrder(nodes: NodeView[], edges: { from: number; to: number }[]) {
   return [...order, ...nodes.filter((n) => n.kind === "plugin" && !seen.has(n.id))];
 }
 
+/**
+ * The only chrome on stage: a slim bar that fades in when the mouse moves and
+ * fades out again while you play. ← / → step through presets.
+ */
+function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) {
+  const { presets, actions } = useStudio();
+  const [awake, setAwake] = useState(true);
+  const hovering = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+
+  const names = presets.presets.map((p) => p.name);
+  const at = presets.current ? names.indexOf(presets.current) : -1;
+  const step = useCallback(
+    (dir: 1 | -1) => {
+      if (names.length < 2 && at >= 0) return;
+      const next = names[(at + dir + names.length) % names.length];
+      if (next && next !== presets.current) actions.loadPreset(next);
+    },
+    [names, at, presets, actions],
+  );
+
+  useEffect(() => {
+    const wake = () => {
+      setAwake(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => !hovering.current && setAwake(false), 2200);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "ArrowLeft") step(-1);
+      else if (e.key === "ArrowRight") step(1);
+    };
+    wake();
+    window.addEventListener("pointermove", wake);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer.current);
+      window.removeEventListener("pointermove", wake);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [step]);
+
+  return (
+    <div
+      className={`stage-hud ${awake ? "awake" : ""}`}
+      onPointerEnter={() => (hovering.current = true)}
+      onPointerLeave={() => (hovering.current = false)}
+    >
+      <button className="icon-btn ghost" onClick={() => step(-1)} disabled={names.length === 0} title="Previous preset (←)">
+        <ChevronLeft size={16} />
+      </button>
+      <span className="stage-hud-name" data-tauri-drag-region>
+        {presets.current ?? "Untitled rig"}
+      </span>
+      <button className="icon-btn ghost" onClick={() => step(1)} disabled={names.length === 0} title="Next preset (→)">
+        <ChevronRight size={16} />
+      </button>
+      <span className="stage-hud-sep" />
+      <button className="btn small" onClick={onEdit} title="Edit the board (⌘E or Esc)">
+        <Pencil size={13} /> Edit
+      </button>
+      <button className="btn small" onClick={onRig} title="Back to the rig (⌘1)">
+        <Workflow size={13} /> Rig
+      </button>
+    </div>
+  );
+}
+
 export default function PedalboardView() {
   const { studio, presets, layoutKey, actions } = useStudio();
   const stored = useMemo(() => parseBoard(studio.pedalboard), [studio.pedalboard]);
@@ -120,7 +192,38 @@ export default function PedalboardView() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const scale = Math.max(0.2, Math.min((avail.w - 48) / board.width, (avail.h - 48) / board.height, 1.4));
+  // ---- stage mode: playing a board shows only the board, in a frameless window
+  const stage = !editing && board.widgets.length > 0;
+  useEffect(() => {
+    if (!stage) return;
+    actions.setStage(true);
+    return () => {
+      actions.setStage(false);
+      exitStage();
+    };
+  }, [stage, actions]);
+  useEffect(() => {
+    if (stage) enterStage(board.width / board.height);
+  }, [stage, board.width, board.height]);
+
+  // ⌘E flips between playing and designing; Esc leaves the stage for the editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        setMode((m) => (m === "edit" ? "play" : "edit"));
+        setSelectedId(null);
+      } else if (stage && !typing && e.key === "Escape") {
+        setMode("edit");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [stage]);
+
+  const margin = stage ? 0 : 48;
+  const scale = Math.max(0.2, Math.min((avail.w - margin) / board.width, (avail.h - margin) / board.height, stage ? 4 : 1.4));
 
   // ---- editing gestures
   const drag = useRef<Drag | null>(null);
@@ -280,36 +383,45 @@ export default function PedalboardView() {
 
   return (
     <RuntimeContext.Provider value={runtime}>
-      <div className={`pedalboard ${editing ? "editing" : "playing"}`}>
-        <div className="pb-toolbar">
-          <div className="segmented small mode">
-            <button className={!editing ? "on" : ""} onClick={() => (setMode("play"), setSelectedId(null))}>
-              <Play size={13} /> Play
-            </button>
-            <button className={editing ? "on" : ""} onClick={() => setMode("edit")}>
-              <Pencil size={13} /> Edit
-            </button>
-          </div>
-          {editing && (
-            <div className="pb-palette">
-              {PALETTE.map((p) => (
-                <button key={p.type} className="btn small" onClick={() => add(p.type)} title={`Add ${WIDGET_META[p.type].name.toLowerCase()}`}>
-                  {p.icon}
-                  {WIDGET_META[p.type].name}
-                </button>
-              ))}
+      <div className={`pedalboard ${editing ? "editing" : "playing"} ${stage ? "on-stage" : ""}`}>
+        {stage && <StageHud onEdit={() => setMode("edit")} onRig={() => actions.setView("rig")} />}
+        {!stage && (
+          <div className="pb-toolbar">
+            <div className="segmented small mode">
+              <button className={!editing ? "on" : ""} onClick={() => (setMode("play"), setSelectedId(null))}>
+                <Play size={13} /> Play
+              </button>
+              <button className={editing ? "on" : ""} onClick={() => setMode("edit")}>
+                <Pencil size={13} /> Edit
+              </button>
             </div>
-          )}
-          <span className="spacer" />
-          <span className="muted pb-title">{presets.current ?? "Untitled rig"} · pedalboard</span>
-        </div>
+            {editing && (
+              <div className="pb-palette">
+                {PALETTE.map((p) => (
+                  <button key={p.type} className="btn small" onClick={() => add(p.type)} title={`Add ${WIDGET_META[p.type].name.toLowerCase()}`}>
+                    {p.icon}
+                    {WIDGET_META[p.type].name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <span className="spacer" />
+            <span className="muted pb-title">{presets.current ?? "Untitled rig"} · pedalboard</span>
+          </div>
+        )}
 
         <div className="pb-body">
-          <div className="pb-stage" ref={stageRef} onPointerDown={() => editing && setSelectedId(null)}>
+          <div
+            className="pb-stage"
+            ref={stageRef}
+            onPointerDown={() => editing && setSelectedId(null)}
+            data-tauri-drag-region={stage || undefined}
+          >
             <div className="pb-board-frame" style={{ width: board.width * scale, height: board.height * scale }}>
               <div
                 className={`pb-board surface-${board.surface} ${editing ? "grid" : ""}`}
                 style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
+                data-tauri-drag-region={stage || undefined}
               >
                 {drawOrder(board.widgets).map((w) => (
                   <div

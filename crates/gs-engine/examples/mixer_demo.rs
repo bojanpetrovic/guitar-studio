@@ -9,10 +9,23 @@ use gs_engine::presets::PresetStore;
 fn main() -> anyhow::Result<()> {
     let dir = std::env::args().nth(1).expect("presets dir");
     let au = scan_format_in_process("au")?;
-    let find = |n: &str| au.iter().find(|p| p.name.to_lowercase().contains(n)).cloned().unwrap();
+    let find = |n: &str| {
+        au.iter()
+            .find(|p| p.name.to_lowercase().contains(n))
+            .cloned()
+            .unwrap()
+    };
     let mut s = Studio::new();
-    let amp = s.add_plugin_node(load_plugin(&find("nolly"), 48_000.0, MAX_BLOCK)?, 320.0, -160.0)?;
-    let delay = s.add_plugin_node(load_plugin(&find("timeless"), 48_000.0, MAX_BLOCK)?, 320.0, 160.0)?;
+    let amp = s.add_plugin_node(
+        load_plugin(&find("nolly"), 48_000.0, MAX_BLOCK)?,
+        320.0,
+        -160.0,
+    )?;
+    let delay = s.add_plugin_node(
+        load_plugin(&find("timeless"), 48_000.0, MAX_BLOCK)?,
+        320.0,
+        160.0,
+    )?;
     let mix = s.add_mixer_node(640.0, 0.0)?;
     s.move_node(2, 1000.0, 0.0);
     s.disconnect(1, 2)?;

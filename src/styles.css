@@ -2519,3 +2519,67 @@ select {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ============================================================ stage mode
+   Playing a pedalboard: the window is frameless and see-through, only the board shows. */
+:root.stage-mode,
+:root.stage-mode body,
+.app.stage-mode {
+  background: transparent;
+}
+.app.stage-mode {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: "stage";
+}
+.app.stage-mode > .titlebar,
+.app.stage-mode > .sidebar {
+  display: none;
+}
+.pedalboard.on-stage .pb-stage {
+  overflow: visible;
+}
+.pedalboard.on-stage .pb-board {
+  box-shadow: none;
+}
+.stage-hud {
+  position: absolute;
+  z-index: 30;
+  top: 12px;
+  left: 50%;
+  transform: translate(-50%, -6px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-2) 88%, transparent);
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.stage-hud.awake {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.stage-hud-name {
+  min-width: 120px;
+  max-width: 260px;
+  padding: 0 6px;
+  text-align: center;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: grab;
+}
+.stage-hud-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--line-2);
+}
