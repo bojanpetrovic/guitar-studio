@@ -161,7 +161,8 @@ impl Studio {
             telemetry: Arc::new(Telemetry::default()),
             metronome,
             tuner: Arc::new(TunerShared::default()),
-            tuner_enabled: Arc::new(AtomicBool::new(false)),
+            // The tuner listens from launch; the panel switch turns it off.
+            tuner_enabled: Arc::new(AtomicBool::new(true)),
             tuner_channel: Arc::new(AtomicU32::new(0)),
             _tuner_thread: None,
             pedalboard: serde_json::Value::Null,

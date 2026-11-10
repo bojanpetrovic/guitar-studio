@@ -39,7 +39,7 @@ pub struct TunerShared {
 impl Default for TunerShared {
     fn default() -> Self {
         Self {
-            enabled: AtomicBool::new(false),
+            enabled: AtomicBool::new(true),
             reference_a4: AtomicF32::new(440.0),
             reading: Mutex::new(None),
         }
