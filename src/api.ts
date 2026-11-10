@@ -1,0 +1,165 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useSyncExternalStore } from "react";
+
+// ---------------------------------------------------------------- types (mirror Rust)
+
+export type NodeType = "input" | "output" | "gain" | "plugin";
+
+export interface PluginDescriptor {
+  name: string;
+  vendor: string;
+  version: number;
+  category: "effect" | "instrument" | "noteEffect" | "analyzer" | "tool";
+  path: string;
+  uniqueId: string;
+  format: "vst3" | "au" | "au3" | "clap";
+  hasEditor: boolean;
+  acceptsMidi: boolean;
+}
+
+export const pluginKey = (p: PluginDescriptor) => `${p.format}:${p.uniqueId}`;
+
+export interface NodeView {
+  id: number;
+  kind: NodeType;
+  x: number;
+  y: number;
+  gainDb: number;
+  bypass: boolean;
+  channel: number;
+  plugin: PluginDescriptor | null;
+}
+
+export interface AudioConfig {
+  inputDevice: string | null;
+  outputDevice: string | null;
+  bufferSize: number;
+}
+
+export interface AudioStatus {
+  running: boolean;
+  inputDevice: string;
+  outputDevice: string;
+  inputChannels: number;
+  outputChannels: number;
+  sampleRate: number;
+  bufferSize: number;
+  latencyMs: number;
+}
+
+export interface MetronomeSettings {
+  enabled: boolean;
+  bpm: number;
+  beatsPerBar: number;
+  subdivision: number;
+  volume: number;
+}
+
+export interface StudioView {
+  nodes: NodeView[];
+  edges: { from: number; to: number }[];
+  audio: AudioStatus | null;
+  audioConfig: AudioConfig;
+  audioError: string | null;
+  metronome: MetronomeSettings;
+  tunerEnabled: boolean;
+  referenceA4: number;
+}
+
+export interface DeviceInfo {
+  name: string;
+  channels: number;
+  isDefault: boolean;
+}
+
+export interface DeviceList {
+  inputs: DeviceInfo[];
+  outputs: DeviceInfo[];
+}
+
+export interface Catalog {
+  plugins: PluginDescriptor[];
+  errors: string[];
+  scannedAt: number | null;
+  scanning: boolean;
+}
+
+export interface TunerReading {
+  frequency: number;
+  note: string;
+  octave: number;
+  cents: number;
+  clarity: number;
+}
+
+export interface Telemetry {
+  nodes: { id: number; peak: [number, number] }[];
+  outputPeak: [number, number];
+  cpuLoad: number;
+  underruns: number;
+  beat: number;
+  beatCounter: number;
+  tuner: TunerReading | null;
+}
+
+// ---------------------------------------------------------------- commands
+
+export const api = {
+  getStudio: () => invoke<StudioView>("get_studio"),
+  listDevices: () => invoke<DeviceList>("list_devices"),
+  setAudioConfig: (config: AudioConfig) => invoke<StudioView>("set_audio_config", { config }),
+  getCatalog: () => invoke<Catalog>("get_catalog"),
+  scanPlugins: () => invoke<Catalog>("scan_plugins"),
+  addPluginNode: (key: string, x: number, y: number) =>
+    invoke<[number, StudioView]>("add_plugin_node", { key, x, y }),
+  addGainNode: (x: number, y: number) => invoke<[number, StudioView]>("add_gain_node", { x, y }),
+  removeNode: (id: number) => invoke<StudioView>("remove_node", { id }),
+  connect: (from: number, to: number) => invoke<StudioView>("connect", { from, to }),
+  disconnect: (from: number, to: number) => invoke<StudioView>("disconnect", { from, to }),
+  setNodeParam: (id: number, param: "gainDb" | "channel", value: number) =>
+    invoke<void>("set_node_param", { id, param, value }),
+  setBypass: (id: number, bypass: boolean) => invoke<void>("set_bypass", { id, bypass }),
+  moveNode: (id: number, x: number, y: number) => invoke<void>("move_node", { id, x, y }),
+  openEditor: (id: number) => invoke<void>("open_editor", { id }),
+  setMetronome: (settings: MetronomeSettings) => invoke<void>("set_metronome", { settings }),
+  setTuner: (enabled: boolean, referenceA4?: number) =>
+    invoke<void>("set_tuner", { enabled, referenceA4: referenceA4 ?? null }),
+};
+
+// ---------------------------------------------------------------- telemetry store
+// 30 Hz updates go into a tiny external store so only meter components re-render.
+
+let telemetry: Telemetry | null = null;
+const subscribers = new Set<() => void>();
+
+listen<Telemetry>("telemetry", (e) => {
+  telemetry = e.payload;
+  subscribers.forEach((fn) => fn());
+});
+
+const subscribe = (fn: () => void) => {
+  subscribers.add(fn);
+  return () => subscribers.delete(fn);
+};
+
+export function useTelemetry<T>(select: (t: Telemetry | null) => T): T {
+  return useSyncExternalStore(subscribe, () => select(telemetry));
+}
+
+/** Linear peak → 0..1 meter position over a -60..0 dB range. */
+export function meterLevel(peak: number): number {
+  if (peak <= 0.001) return 0;
+  const db = 20 * Math.log10(peak);
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+
+export const formatLabel: Record<PluginDescriptor["format"], string> = {
+  vst3: "VST3",
+  au: "AU",
+  au3: "AUv3",
+  clap: "CLAP",
+};
+
+/** Let React paint (e.g. a "loading" toast) before a main-thread-blocking command. */
+export const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 16)));
