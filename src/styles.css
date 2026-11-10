@@ -349,6 +349,15 @@ button.chip:hover {
   border-color: var(--line-2);
   background: var(--panel-2);
 }
+/* Fixed width so the title bar doesn't shift as the load goes 9% → 10% → 100%. */
+.cpu-chip {
+  flex: none;
+}
+.cpu-value {
+  display: inline-block;
+  width: 4ch; /* "100%" in the mono font */
+  text-align: right;
+}
 .audio-chip {
   max-width: 640px;
 }

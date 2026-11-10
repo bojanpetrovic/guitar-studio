@@ -34,21 +34,29 @@ export default function GraphCanvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   // Engine state is the source of truth; keep local selection when it changes.
+  // Reuse each previous flow node (or at least its measured size): a node object
+  // without `measured` is hidden and re-measured by React Flow, and a fader drag
+  // updates the engine view ~60×/s — fresh objects every time left the whole canvas
+  // blank (all nodes stuck unmeasured).
   useEffect(() => {
-    setNodes((prev) =>
-      studio.nodes.map((n) => {
+    setNodes((prev) => {
+      const byId = new Map(prev.map((p) => [p.id, p]));
+      return studio.nodes.map((n) => {
         const id = String(n.id);
-        const old = prev.find((p) => p.id === id);
+        const old = byId.get(id);
+        if (old && old.data.node === n) return old;
+        const position = old && old.position.x === n.x && old.position.y === n.y ? old.position : { x: n.x, y: n.y };
         return {
+          ...old,
           id,
           type: "studio",
-          position: { x: n.x, y: n.y },
+          position,
           data: { node: n },
           selected: old?.selected,
           deletable: n.kind !== "input" && n.kind !== "output",
         };
-      }),
-    );
+      });
+    });
   }, [studio.nodes, setNodes]);
 
   useEffect(() => {

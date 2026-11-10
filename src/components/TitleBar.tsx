@@ -11,9 +11,9 @@ function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
   const pct = Math.round(cpu * 100);
   return (
-    <div className={`chip ${pct > 70 ? "warn" : ""}`} title="Audio thread load">
+    <div className={`chip cpu-chip ${pct > 70 ? "warn" : ""}`} title="Audio thread load">
       <Cpu size={14} />
-      <span className="mono">{pct}%</span>
+      <span className="mono cpu-value">{pct}%</span>
     </div>
   );
 }
