@@ -129,6 +129,9 @@ export default function GraphCanvas() {
         minZoom={0.3}
         maxZoom={1.6}
         colorMode={theme.mode}
+        // Space and ↑ / ↓ belong to the metronome (see Dock).
+        panActivationKeyCode={null}
+        disableKeyboardA11y
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="var(--grid-dot)" />
         <Controls showInteractive={false} position="bottom-left" />

@@ -85,7 +85,7 @@ function chainOrder(nodes: NodeView[], edges: { from: number; to: number }[]) {
 
 /**
  * The only chrome on stage: a slim bar that fades in when the mouse moves and
- * fades out again while you play. ← / → step through presets.
+ * fades out again while you play. ← / → (or Page Up / Page Down, [ / ]) step through presets.
  */
 function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) {
   const { presets, actions } = useStudio();
@@ -112,8 +112,11 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "ArrowLeft") step(-1);
-      else if (e.key === "ArrowRight") step(1);
+      if ((e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
+      if (e.key === "ArrowLeft" || e.key === "PageUp" || e.key === "[") step(-1);
+      else if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === "]") step(1);
+      else return;
+      e.preventDefault();
     };
     wake();
     window.addEventListener("pointermove", wake);
@@ -150,6 +153,9 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
     </div>
   );
 }
+
+/** Height the floating tuner/metronome dock takes under the board on stage (see .dock in styles.css). */
+const STAGE_DOCK_H = 64;
 
 export default function PedalboardView() {
   const { studio, presets, layoutKey, actions } = useStudio();
@@ -203,7 +209,7 @@ export default function PedalboardView() {
     };
   }, [stage, actions]);
   useEffect(() => {
-    if (stage) enterStage(board.width / board.height);
+    if (stage) enterStage(board.width / board.height, STAGE_DOCK_H);
   }, [stage, board.width, board.height]);
 
   // ⌘E flips between playing and designing; Esc leaves the stage for the editor.
@@ -309,8 +315,10 @@ export default function PedalboardView() {
         setSelectedId(null);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // On document, so a selected widget claims the arrow keys before the window-level
+    // tempo keys see them (those skip events that were already handled).
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [editing, selected, board, remove, duplicate, updateWidget]);
 
   // ---- "Build from rig"

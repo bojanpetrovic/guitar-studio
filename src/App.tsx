@@ -17,8 +17,7 @@ import {
 import TitleBar from "./components/TitleBar";
 import PluginBrowser from "./components/PluginBrowser";
 import GraphCanvas from "./components/GraphCanvas";
-import TunerPanel from "./components/TunerPanel";
-import MetronomePanel from "./components/MetronomePanel";
+import Dock from "./components/Dock";
 import SettingsDialog from "./components/SettingsDialog";
 import Toasts, { Toast } from "./components/Toasts";
 import PedalboardView from "./pedalboard/PedalboardView";
@@ -348,10 +347,7 @@ export default function App() {
             <PluginBrowser />
           </aside>
           <main className="stage">{view === "rig" ? <GraphCanvas /> : <PedalboardView />}</main>
-          <aside className="sidebar right">
-            <TunerPanel />
-            <MetronomePanel />
-          </aside>
+          <Dock />
         </div>
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
         <Toasts toasts={toasts} onDismiss={dismiss} />

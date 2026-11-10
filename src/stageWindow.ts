@@ -39,8 +39,11 @@ const serial = (job: () => Promise<void>) => {
   return queue;
 };
 
-/** Enter (or re-fit) stage mode for a board of the given aspect ratio (width / height). */
-export function enterStage(aspect: number) {
+/**
+ * Enter (or re-fit) stage mode for a board of the given aspect ratio (width / height),
+ * with `extraH` px of room underneath it (the tuner/metronome dock).
+ */
+export function enterStage(aspect: number, extraH = 0) {
   if (!IN_TAURI) return;
   return serial(async () => {
     const win = getCurrentWindow();
@@ -59,11 +62,11 @@ export function enterStage(aspect: number) {
     const mon = await currentMonitor();
     const maxW = mon ? (mon.workArea.size.width / mon.scaleFactor) * 0.96 : 1600;
     const maxH = mon ? (mon.workArea.size.height / mon.scaleFactor) * 0.9 : 900;
-    let width = Math.min(first ? size.width : Math.max(size.width, size.height * aspect), maxW);
-    let height = width / aspect;
+    let width = Math.min(first ? size.width : Math.max(size.width, (size.height - extraH) * aspect), maxW);
+    let height = width / aspect + extraH;
     if (height > maxH) {
       height = maxH;
-      width = height * aspect;
+      width = (height - extraH) * aspect;
     }
     width = Math.round(width);
     height = Math.round(height);
