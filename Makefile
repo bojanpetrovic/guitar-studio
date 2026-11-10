@@ -34,9 +34,10 @@ run: build ## Run the release binary (no bundle)
 
 # ---------------------------------------------------------------- build
 
-build: node_modules ## Build frontend + release binary
-	npm run build
-	cargo build --release -p guitar-studio
+build: node_modules ## Build frontend + release binary (UI embedded, no .app bundle)
+	# Through the Tauri CLI: a plain `cargo build` leaves out the custom-protocol
+	# feature, so the binary would load the dev server URL and show a blank window.
+	npm run tauri build -- --no-bundle
 
 bundle: node_modules ## Build the macOS .app and .dmg
 	npm run tauri build
