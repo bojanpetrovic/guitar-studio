@@ -6,6 +6,7 @@ import {
   Catalog,
   nextFrame,
   PluginDescriptor,
+  MetronomeSettings,
   pluginKey,
   PRESET_EXISTS,
   PresetList,
@@ -19,6 +20,7 @@ import TunerPanel from "./components/TunerPanel";
 import MetronomePanel from "./components/MetronomePanel";
 import SettingsDialog from "./components/SettingsDialog";
 import Toasts, { Toast } from "./components/Toasts";
+import PedalboardView from "./pedalboard/PedalboardView";
 
 type Pos = { x: number; y: number };
 
@@ -41,7 +43,15 @@ export interface StudioActions {
   newPreset: () => Promise<void>;
   deletePreset: (name: string) => Promise<void>;
   renamePreset: (from: string, to: string) => Promise<boolean>;
+  setMetronome: (patch: Partial<MetronomeSettings>) => void;
+  tapTempo: () => void;
+  setTuner: (enabled: boolean, referenceA4?: number) => void;
+  /** Replace the pedalboard layout (kept locally and mirrored to the engine). */
+  updateBoard: (board: unknown) => void;
+  setView: (view: View) => void;
 }
+
+export type View = "rig" | "board";
 
 interface Ctx {
   studio: StudioView;
@@ -49,6 +59,7 @@ interface Ctx {
   presets: PresetList;
   /** Bumps whenever a whole rig is swapped in, so the canvas can re-fit. */
   layoutKey: number;
+  view: View;
   actions: StudioActions;
 }
 
@@ -66,9 +77,16 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [presets, setPresets] = useState<PresetList>({ presets: [], current: null, last: null, dir: "" });
   const [layoutKey, setLayoutKey] = useState(0);
+  const [view, setView] = useState<View>("rig");
+  const taps = useRef<number[]>([]);
   const toastId = useRef(1);
   const studioRef = useRef<StudioView | null>(null);
   studioRef.current = studio;
+  /** Take a fresh engine view but keep our pedalboard (the UI owns it between preset loads). */
+  const applyView = useCallback(
+    (v: StudioView) => setStudio((s) => (s ? { ...v, pedalboard: s.pedalboard } : v)),
+    [],
+  );
 
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const toast = useCallback(
@@ -159,7 +177,7 @@ export default function App() {
 
   const actions: StudioActions = useMemo(
     () => ({
-      apply: setStudio,
+      apply: applyView,
       toast,
       openSettings: () => setSettingsOpen(true),
       addPlugin: async (p, pos) => {
@@ -171,7 +189,7 @@ export default function App() {
         dismiss(loading);
         if (!res) return;
         const [id, view] = res;
-        setStudio(autoWire ? await appendToChain(id, view) : view);
+        applyView(autoWire ? await appendToChain(id, view) : view);
       },
       addGain: async (pos) => {
         const autoWire = !pos;
@@ -179,21 +197,24 @@ export default function App() {
         const res = await guard(() => api.addGainNode(at.x, at.y));
         if (!res) return;
         const [id, view] = res;
-        setStudio(autoWire ? await appendToChain(id, view) : view);
+        applyView(autoWire ? await appendToChain(id, view) : view);
       },
       remove: async (id) => {
         const v = await guard(() => api.removeNode(id));
-        if (v) setStudio(v);
+        if (v) applyView(v);
       },
       connect: async (from, to) => {
         const v = await guard(() => api.connect(from, to));
-        if (v) setStudio(v);
+        if (v) applyView(v);
       },
       disconnect: async (from, to) => {
         const v = await guard(() => api.disconnect(from, to));
-        if (v) setStudio(v);
+        if (v) applyView(v);
       },
       setParam: (id, param, value) => {
+        setStudio(
+          (s) => s && { ...s, nodes: s.nodes.map((n) => (n.id === id ? { ...n, [param]: value } : n)) },
+        );
         api.setNodeParam(id, param, value).catch((e) => toast(String(e), "error"));
       },
       setBypass: async (id, bypass) => {
@@ -234,6 +255,35 @@ export default function App() {
         if (list) setPresets(list);
         return !!list;
       },
+      setMetronome: (patch) => {
+        const cur = studioRef.current;
+        if (!cur) return;
+        const next = { ...cur.metronome, ...patch };
+        next.bpm = Math.round(Math.max(30, Math.min(300, next.bpm)));
+        setStudio((s) => s && { ...s, metronome: next });
+        api.setMetronome(next).catch((e) => toast(String(e), "error"));
+      },
+      tapTempo: () => {
+        const now = performance.now();
+        taps.current = [...taps.current.filter((t) => now - t < 2500), now].slice(-6);
+        if (taps.current.length < 2) return;
+        const gaps = taps.current.slice(1).map((t, i) => t - taps.current[i]);
+        const bpm = 60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length);
+        const cur = studioRef.current;
+        if (!cur) return;
+        const next = { ...cur.metronome, bpm: Math.round(Math.max(30, Math.min(300, bpm))) };
+        setStudio((s) => s && { ...s, metronome: next });
+        api.setMetronome(next).catch(() => {});
+      },
+      setTuner: (enabled, referenceA4) => {
+        setStudio((s) => s && { ...s, tunerEnabled: enabled, referenceA4: referenceA4 ?? s.referenceA4 });
+        api.setTuner(enabled, referenceA4 ?? studioRef.current?.referenceA4).catch((e) => toast(String(e), "error"));
+      },
+      updateBoard: (board) => {
+        setStudio((s) => s && { ...s, pedalboard: board });
+        api.setPedalboard(board).catch((e) => toast(String(e), "error"));
+      },
+      setView,
       scan: async () => {
         const c = await guard(() => api.scanPlugins());
         if (c) {
@@ -242,22 +292,20 @@ export default function App() {
         }
       },
     }),
-    [toast, guard, dismiss, appendToChain, chainPosition, loadPresetNow, applyLoad],
+    [toast, guard, dismiss, appendToChain, chainPosition, loadPresetNow, applyLoad, applyView],
   );
 
   if (!studio) return <div className="boot">Starting audio engine…</div>;
 
   return (
-    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, actions }}>
+    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, actions }}>
       <ReactFlowProvider>
-        <div className="app">
+        <div className={`app view-${view}`}>
           <TitleBar />
           <aside className="sidebar left">
             <PluginBrowser />
           </aside>
-          <main className="stage">
-            <GraphCanvas />
-          </main>
+          <main className="stage">{view === "rig" ? <GraphCanvas /> : <PedalboardView />}</main>
           <aside className="sidebar right">
             <TunerPanel />
             <MetronomePanel />

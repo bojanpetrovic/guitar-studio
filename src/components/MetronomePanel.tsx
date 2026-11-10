@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
 import { Minus, Pause, Play, Plus, Volume2 } from "lucide-react";
 import { useStudio } from "../App";
-import { api, MetronomeSettings, useTelemetry } from "../api";
+import { useTelemetry } from "../api";
 
 const SUBDIVISIONS = [
   { value: 1, label: "♩" },
@@ -28,24 +27,10 @@ function BeatDots({ beats, enabled }: { beats: number; enabled: boolean }) {
 
 export default function MetronomePanel() {
   const { studio, actions } = useStudio();
-  const [m, setM] = useState<MetronomeSettings>(studio.metronome);
-  const taps = useRef<number[]>([]);
-
-  useEffect(() => {
-    api.setMetronome(m).catch((e) => actions.toast(String(e), "error"));
-  }, [m, actions]);
-
-  const update = (patch: Partial<MetronomeSettings>) => setM((s) => ({ ...s, ...patch }));
-  const setBpm = (bpm: number) => update({ bpm: Math.round(Math.max(30, Math.min(300, bpm))) });
-
-  const tap = () => {
-    const now = performance.now();
-    taps.current = [...taps.current.filter((t) => now - t < 2500), now].slice(-6);
-    if (taps.current.length >= 2) {
-      const gaps = taps.current.slice(1).map((t, i) => t - taps.current[i]);
-      setBpm(60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length));
-    }
-  };
+  const m = studio.metronome;
+  const update = actions.setMetronome;
+  const setBpm = (bpm: number) => update({ bpm });
+  const tap = actions.tapTempo;
 
   return (
     <section className="panel metronome">

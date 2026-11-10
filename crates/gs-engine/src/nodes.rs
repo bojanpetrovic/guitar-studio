@@ -159,7 +159,7 @@ impl Processor for PluginNode {
             copy_through(input, output);
             return;
         }
-        let Some(mut guard) = self.plugin.try_lock() else {
+        let Some(mut guard) = lock_briefly(&self.plugin) else {
             copy_through(input, output);
             return;
         };
@@ -235,4 +235,20 @@ impl Processor for PluginNode {
             },
         }
     }
+}
+
+/// Try to take a plugin's lock without blocking: spin for a few microseconds, which
+/// covers the control thread's short critical sections (parameter writes and reads
+/// from the pedalboard). Long holds (editor open, state save) still fall back to
+/// dry pass-through rather than stalling the audio thread.
+fn lock_briefly(
+    plugin: &SharedPlugin,
+) -> Option<parking_lot::MutexGuard<'_, crate::plugins::PluginSlot>> {
+    for _ in 0..512 {
+        if let Some(guard) = plugin.try_lock() {
+            return Some(guard);
+        }
+        std::hint::spin_loop();
+    }
+    None
 }

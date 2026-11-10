@@ -1,4 +1,5 @@
-import { Cpu, Settings2 } from "lucide-react";
+import { useEffect } from "react";
+import { Cpu, LayoutDashboard, Settings2, Workflow } from "lucide-react";
 import { useStudio } from "../App";
 import { useTelemetry } from "../api";
 import Meter from "./Meter";
@@ -16,6 +17,31 @@ function CpuReadout() {
   );
 }
 
+function ViewSwitch() {
+  const { view, actions } = useStudio();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "1") actions.setView("rig");
+      else if (e.key === "2") actions.setView("board");
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [actions]);
+  return (
+    <div className="segmented small view-switch">
+      <button className={view === "rig" ? "on" : ""} onClick={() => actions.setView("rig")} title="Rig (⌘1)">
+        <Workflow size={13} /> Rig
+      </button>
+      <button className={view === "board" ? "on" : ""} onClick={() => actions.setView("board")} title="Pedalboard (⌘2)">
+        <LayoutDashboard size={13} /> Pedalboard
+      </button>
+    </div>
+  );
+}
+
 export default function TitleBar() {
   const { studio, actions } = useStudio();
   const a = studio.audio;
@@ -27,6 +53,7 @@ export default function TitleBar() {
         <span className="brand-name">Guitar Studio</span>
       </div>
       <PresetMenu />
+      <ViewSwitch />
 
       <div className="titlebar-center" data-tauri-drag-region>
         <button className={`chip audio-chip ${a ? "ok" : "bad"}`} onClick={actions.openSettings}>

@@ -8,12 +8,12 @@ PLUGIN       ?= nolly
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev build bundle run test test-engine lint fmt fmt-check check \
-        smoke preset-test scan icons clean clean-all reset-settings
+        smoke preset-test param-test params scan icons clean clean-all reset-settings
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make \033[36m<target>\033[0m [VAR=value]\n\n"} \
 		/^[a-zA-Z_-]+:.*## / { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@printf "\nVariables: FORMAT=$(FORMAT) PLUGIN=$(PLUGIN) (used by smoke, preset-test)\n\n"
+	@printf "\nVariables: FORMAT=$(FORMAT) PLUGIN=$(PLUGIN) (used by smoke, preset-test, param-test, params)\n\n"
 
 # ---------------------------------------------------------------- setup
 
@@ -72,6 +72,12 @@ smoke: ## Load + process a plugin headless, e.g. make smoke FORMAT=vst3 PLUGIN=n
 
 preset-test: ## Save + reload a rig with a real plugin, e.g. make preset-test FORMAT=au PLUGIN=nolly
 	cargo run -p gs-engine --example preset_roundtrip -- $(FORMAT) "$(PLUGIN)"
+
+param-test: ## Set + read back a plugin's parameters, e.g. make param-test FORMAT=au PLUGIN=nolly
+	cargo run -p gs-engine --example param_control -- $(FORMAT) "$(PLUGIN)"
+
+params: ## List a plugin's parameters and ids, e.g. make params FORMAT=au PLUGIN=nolly
+	cargo run -q -p gs-engine --example list_params -- $(FORMAT) "$(PLUGIN)"
 
 scan: ## Rescan all plugins (crash-isolated) into the app's cache
 	cargo build -p guitar-studio

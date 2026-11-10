@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { useStudio } from "../App";
-import { api, useTelemetry } from "../api";
+import { useTelemetry } from "../api";
 
 const ARC = 50; // degrees of needle swing at ±50 cents
 
@@ -40,20 +39,12 @@ function Gauge({ cents, active, state }: { cents: number; active: boolean; state
 
 export default function TunerPanel() {
   const { studio, actions } = useStudio();
-  const [enabled, setEnabled] = useState(studio.tunerEnabled);
-  const [a4, setA4] = useState(studio.referenceA4);
+  const enabled = studio.tunerEnabled;
+  const a4 = studio.referenceA4;
   const reading = useTelemetry((t) => t?.tuner ?? null);
 
-  const toggle = () => {
-    const next = !enabled;
-    setEnabled(next);
-    api.setTuner(next, a4).catch((e) => actions.toast(String(e), "error"));
-  };
-  const changeA4 = (d: number) => {
-    const v = Math.max(430, Math.min(450, a4 + d));
-    setA4(v);
-    api.setTuner(enabled, v);
-  };
+  const toggle = () => actions.setTuner(!enabled, a4);
+  const changeA4 = (d: number) => actions.setTuner(enabled, Math.max(430, Math.min(450, a4 + d)));
 
   const active = enabled && !!reading;
   const cents = reading?.cents ?? 0;

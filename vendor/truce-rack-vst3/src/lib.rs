@@ -39,8 +39,9 @@ use std::ptr;
 use vst3::Steinberg::Vst::{
     AudioBusBuffers, AudioBusBuffers__type0, Event, Event_::EventTypes_, Event__type0,
     IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
-    IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
+    IComponentHandler, IComponentHandlerTrait, IConnectionPointTrait, IEditController,
+    IEditControllerTrait, IEventList, IEventListTrait, IParamValueQueue, IParamValueQueueTrait,
+    IParameterChanges, IParameterChangesTrait, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
     ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
     ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup,
     SymbolicSampleSizes_, ViewType,
@@ -537,6 +538,13 @@ pub struct Vst3Plugin {
     /// `open()`, released on `close()` / Drop.
     view: Option<ComPtr<IPlugView>>,
     editor_open: bool,
+
+    /// [guitar-studio patch] Parameter changes for the processor, delivered through
+    /// `ProcessData::inputParameterChanges` on the next `process` call. Fed by host
+    /// `set_parameter` calls and by the plugin's own editor via `IComponentHandler`.
+    pending_params: PendingParams,
+    /// Keeps the host's `IComponentHandler` alive for the controller.
+    _handler: ComWrapper<HostHandler>,
 }
 
 impl Vst3Plugin {
@@ -631,6 +639,15 @@ impl Vst3Plugin {
             (None, None)
         };
 
+        // [guitar-studio patch] Give the controller a component handler so edits made
+        // in the plugin's editor (`performEdit`) are forwarded to the processor, as the
+        // VST3 spec makes the host responsible for.
+        let pending_params: PendingParams = std::sync::Arc::default();
+        let handler = ComWrapper::new(HostHandler { pending: pending_params.clone() });
+        if let Some(h) = handler.as_com_ref::<IComponentHandler>() {
+            unsafe { controller.setComponentHandler(h.as_ptr()) };
+        }
+
         let param_count_raw = unsafe { controller.getParameterCount() }.max(0);
         #[allow(clippy::cast_sign_loss)]
         let param_count = param_count_raw as usize;
@@ -657,6 +674,8 @@ impl Vst3Plugin {
             processing: false,
             view: None,
             editor_open: false,
+            pending_params,
+            _handler: handler,
         })
     }
 }
@@ -788,6 +807,11 @@ impl PluginCore for Vst3Plugin {
                 "IEditController::setParamNormalized failed".into(),
             ));
         }
+        // [guitar-studio patch] The controller alone doesn't change the sound; queue
+        // the change for the processor too.
+        if let Ok(mut q) = self.pending_params.lock() {
+            q.push((info.id, clamped));
+        }
         Ok(())
     }
 
@@ -851,6 +875,20 @@ impl PluginCore for Vst3Plugin {
             self.processor
                 .setBusArrangements(&raw mut input_arr, 1, &raw mut output_arr, 1)
         };
+
+        // [guitar-studio patch] Activate the main buses. VST3 hosts must do this before
+        // `setActive`; SDK-based plugins start with every bus inactive and render
+        // silence otherwise.
+        unsafe {
+            use vst3::Steinberg::Vst::{BusDirections_, MediaTypes_};
+            let (audio, event) = (MediaTypes_::kAudio as i32, MediaTypes_::kEvent as i32);
+            let (input, output) = (BusDirections_::kInput as i32, BusDirections_::kOutput as i32);
+            for (media, dir) in [(audio, input), (audio, output), (event, input)] {
+                if self.component.getBusCount(media, dir) > 0 {
+                    self.component.activateBus(media, dir, 0, 1);
+                }
+            }
+        }
 
         let mut setup = ProcessSetup {
             #[allow(clippy::cast_possible_wrap)]
@@ -1147,6 +1185,24 @@ impl Plugin<f32> for Vst3Plugin {
             .transport
             .map(|t| build_vst3_context(&t, context.sample_rate));
 
+        // [guitar-studio patch] Deliver queued parameter changes (host + editor) and any
+        // ParamValue events to the processor.
+        let mut changes: Vec<(u32, f64)> = self
+            .pending_params
+            .try_lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
+        for event in events {
+            if let truce_rack_core::events::EventBody::ParamValue { param_id, value } = event.body {
+                changes.push((param_id, value.clamp(0.0, 1.0)));
+            }
+        }
+        let param_changes = (!changes.is_empty()).then(|| ComWrapper::new(ParamChanges::from_changes(&changes)));
+        let param_changes_ptr = param_changes
+            .as_ref()
+            .and_then(|c| c.as_com_ref::<IParameterChanges>())
+            .map_or(ptr::null_mut(), |r| r.as_ptr());
+
         let mut data = ProcessData {
             #[allow(clippy::cast_possible_wrap)]
             processMode: ProcessModes_::kRealtime as i32,
@@ -1157,7 +1213,7 @@ impl Plugin<f32> for Vst3Plugin {
             numOutputs: 1,
             inputs: &raw mut input_bus,
             outputs: &raw mut output_bus,
-            inputParameterChanges: ptr::null_mut::<IParameterChanges>(),
+            inputParameterChanges: param_changes_ptr,
             outputParameterChanges: ptr::null_mut::<IParameterChanges>(),
             inputEvents: input_events_ptr.as_ptr(),
             outputEvents: output_events_ptr.as_ptr(),
@@ -1175,6 +1231,140 @@ impl Plugin<f32> for Vst3Plugin {
         } else {
             Ok(ProcessStatus::Error)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [guitar-studio patch] Parameter plumbing: IComponentHandler + IParameterChanges.
+// ---------------------------------------------------------------------------
+
+type PendingParams = std::sync::Arc<std::sync::Mutex<Vec<(u32, f64)>>>;
+
+/// Host side of `IComponentHandler`: queues editor edits for the processor.
+struct HostHandler {
+    pending: PendingParams,
+}
+
+impl Class for HostHandler {
+    type Interfaces = (IComponentHandler,);
+}
+
+impl IComponentHandlerTrait for HostHandler {
+    unsafe fn beginEdit(&self, _id: u32) -> vst3::Steinberg::tresult {
+        kResultOk
+    }
+    unsafe fn performEdit(&self, id: u32, value: f64) -> vst3::Steinberg::tresult {
+        if let Ok(mut q) = self.pending.lock() {
+            q.push((id, value));
+        }
+        kResultOk
+    }
+    unsafe fn endEdit(&self, _id: u32) -> vst3::Steinberg::tresult {
+        kResultOk
+    }
+    unsafe fn restartComponent(&self, _flags: i32) -> vst3::Steinberg::tresult {
+        kResultOk
+    }
+}
+
+/// One parameter's points for this block.
+struct ParamQueue {
+    id: u32,
+    points: std::cell::RefCell<Vec<(i32, f64)>>,
+}
+
+impl Class for ParamQueue {
+    type Interfaces = (IParamValueQueue,);
+}
+
+impl IParamValueQueueTrait for ParamQueue {
+    unsafe fn getParameterId(&self) -> u32 {
+        self.id
+    }
+    unsafe fn getPointCount(&self) -> i32 {
+        i32::try_from(self.points.borrow().len()).unwrap_or(i32::MAX)
+    }
+    unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut f64) -> vst3::Steinberg::tresult {
+        let points = self.points.borrow();
+        let Some(&(offset, v)) = usize::try_from(index).ok().and_then(|i| points.get(i)) else {
+            return vst3::Steinberg::kResultFalse;
+        };
+        unsafe {
+            if !sample_offset.is_null() {
+                *sample_offset = offset;
+            }
+            if !value.is_null() {
+                *value = v;
+            }
+        }
+        kResultOk
+    }
+    unsafe fn addPoint(&self, sample_offset: i32, value: f64, index: *mut i32) -> vst3::Steinberg::tresult {
+        let mut points = self.points.borrow_mut();
+        points.push((sample_offset, value));
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(points.len() - 1).unwrap_or(0) };
+        }
+        kResultOk
+    }
+}
+
+/// The block's set of parameter queues (`ProcessData::inputParameterChanges`).
+struct ParamChanges {
+    queues: std::cell::RefCell<Vec<ComWrapper<ParamQueue>>>,
+}
+
+impl ParamChanges {
+    /// One queue per parameter; the last value queued for a parameter wins.
+    fn from_changes(changes: &[(u32, f64)]) -> Self {
+        let mut latest: Vec<(u32, f64)> = Vec::with_capacity(changes.len());
+        for &(id, v) in changes {
+            match latest.iter_mut().find(|(i, _)| *i == id) {
+                Some(slot) => slot.1 = v,
+                None => latest.push((id, v)),
+            }
+        }
+        let queues = latest
+            .into_iter()
+            .map(|(id, v)| ComWrapper::new(ParamQueue { id, points: std::cell::RefCell::new(vec![(0, v)]) }))
+            .collect();
+        Self { queues: std::cell::RefCell::new(queues) }
+    }
+
+    fn queue_ptr(q: &ComWrapper<ParamQueue>) -> *mut IParamValueQueue {
+        q.as_com_ref::<IParamValueQueue>().map_or(ptr::null_mut(), |r| r.as_ptr())
+    }
+}
+
+impl Class for ParamChanges {
+    type Interfaces = (IParameterChanges,);
+}
+
+impl IParameterChangesTrait for ParamChanges {
+    unsafe fn getParameterCount(&self) -> i32 {
+        i32::try_from(self.queues.borrow().len()).unwrap_or(i32::MAX)
+    }
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        let queues = self.queues.borrow();
+        usize::try_from(index).ok().and_then(|i| queues.get(i)).map_or(ptr::null_mut(), Self::queue_ptr)
+    }
+    unsafe fn addParameterData(&self, id: *const u32, index: *mut i32) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return ptr::null_mut();
+        }
+        let id = unsafe { *id };
+        let mut queues = self.queues.borrow_mut();
+        let pos = match queues.iter().position(|q| q.id == id) {
+            Some(p) => p,
+            None => {
+                queues.push(ComWrapper::new(ParamQueue { id, points: std::cell::RefCell::new(Vec::new()) }));
+                queues.len() - 1
+            }
+        };
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(pos).unwrap_or(0) };
+        }
+        Self::queue_ptr(&queues[pos])
     }
 }
 

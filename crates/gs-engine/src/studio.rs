@@ -4,7 +4,7 @@ use crate::audio::{self, AudioConfig, AudioShared, AudioStatus, RunningAudio, Te
 use crate::graph::{NodeId, Schedule, Step, topo_order};
 use crate::metronome::{MetronomeSettings, MetronomeShared};
 use crate::nodes::{GainNode, InputNode, MAX_BLOCK, NodeShared, PluginNode, Processor};
-use crate::plugins::{self, PluginDescriptor, PluginSlot, SharedPlugin};
+use crate::plugins::{self, ParamInfo, PluginDescriptor, PluginSlot, SharedPlugin};
 use crate::presets::{self, Patch, PatchNode};
 use crate::tuner::{self, TunerReading, TunerShared, TunerThread};
 use crate::util::db_to_gain;
@@ -66,6 +66,8 @@ pub struct StudioView {
     pub metronome: MetronomeSettings,
     pub tuner_enabled: bool,
     pub reference_a4: f32,
+    /// The current pedalboard layout (opaque to the engine; `null` = none yet).
+    pub pedalboard: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +103,7 @@ pub struct Studio {
     tuner_enabled: Arc<AtomicBool>,
     tuner_channel: Arc<AtomicU32>,
     _tuner_thread: Option<TunerThread>,
+    pedalboard: serde_json::Value,
 }
 
 impl Default for Studio {
@@ -131,6 +134,7 @@ impl Studio {
             tuner_enabled: Arc::new(AtomicBool::new(false)),
             tuner_channel: Arc::new(AtomicU32::new(0)),
             _tuner_thread: None,
+            pedalboard: serde_json::Value::Null,
         };
         let input = s.insert_node(NodeType::Input, 0.0, 0.0, 0.0, None);
         let output = s.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
@@ -439,6 +443,7 @@ impl Studio {
             }),
             nodes,
             edges: self.edges.clone(),
+            pedalboard: (!self.pedalboard.is_null()).then(|| self.pedalboard.clone()),
         };
         (patch, warnings)
     }
@@ -494,6 +499,7 @@ impl Studio {
         }
         self.audio = audio;
 
+        self.pedalboard = patch.pedalboard.clone().unwrap_or(serde_json::Value::Null);
         if let Some(m) = &patch.metronome {
             self.metronome.apply(&MetronomeSettings {
                 enabled: self.metronome.settings().enabled,
@@ -537,8 +543,63 @@ impl Studio {
                 },
             ],
             edges: vec![(1, 2)],
+            pedalboard: None,
         };
         self.apply_patch(&blank, HashMap::new())
+    }
+
+    // ------------------------------------------------------------------ pedalboard
+
+    pub fn set_pedalboard(&mut self, board: serde_json::Value) {
+        self.pedalboard = board;
+    }
+
+    /// Parameters a plugin node exposes (hidden / read-only ones are left out).
+    pub fn plugin_params(&self, id: NodeId) -> Result<Vec<ParamInfo>> {
+        let plugin = self
+            .plugin(id)
+            .ok_or_else(|| anyhow!("node {id} is not a plugin"))?;
+        Ok(plugin.lock().params.clone())
+    }
+
+    /// Set a plugin parameter by its stable id, in native units (clamped to range).
+    /// Call from the main thread: the plugin lock is held only for the call, and the
+    /// audio thread spins briefly instead of dropping the block.
+    pub fn set_plugin_param(&self, id: NodeId, param_id: u32, value: f64) -> Result<()> {
+        let plugin = self
+            .plugin(id)
+            .ok_or_else(|| anyhow!("node {id} is not a plugin"))?;
+        let mut slot = plugin.lock();
+        let index = slot
+            .param_index(param_id)
+            .ok_or_else(|| anyhow!("unknown parameter {param_id}"))?;
+        let info = &slot.params[index];
+        let value = value.clamp(info.min.min(info.max), info.max.max(info.min));
+        let plugin_index = info.index;
+        slot.plugin.set_parameter(plugin_index, value)?;
+        Ok(())
+    }
+
+    /// Current values for `(node, param id)` pairs; `None` where the node or parameter
+    /// no longer exists. Each plugin is locked once for all of its parameters.
+    pub fn param_values(&self, items: &[(NodeId, u32)]) -> Vec<Option<f64>> {
+        let mut out = vec![None; items.len()];
+        let mut by_node: BTreeMap<NodeId, Vec<usize>> = BTreeMap::new();
+        for (i, (node, _)) in items.iter().enumerate() {
+            by_node.entry(*node).or_default().push(i);
+        }
+        for (node, idxs) in by_node {
+            let Some(plugin) = self.plugin(node) else {
+                continue;
+            };
+            let slot = plugin.lock();
+            for i in idxs {
+                out[i] = slot
+                    .param_index(items[i].1)
+                    .and_then(|pi| slot.plugin.parameter_value(slot.params[pi].index).ok());
+            }
+        }
+        out
     }
 
     // ------------------------------------------------------------- metronome / tuner
@@ -587,6 +648,7 @@ impl Studio {
             metronome: self.metronome.settings(),
             tuner_enabled: self.tuner_enabled.load(Ordering::Relaxed),
             reference_a4: self.tuner.reference_a4.load(),
+            pedalboard: self.pedalboard.clone(),
         }
     }
 
@@ -653,8 +715,27 @@ mod tests {
         );
         let edges: Vec<_> = v.edges.iter().map(|e| (e.from, e.to)).collect();
         assert_eq!(edges, vec![(1, gain.id), (gain.id, 2)]);
+        assert!(v.pedalboard.is_null());
         // New nodes don't collide with restored ids.
         assert!(t.add_gain_node(0.0, 0.0).unwrap() > gain.id);
+    }
+
+    #[test]
+    fn pedalboard_travels_with_presets() {
+        let mut s = Studio::new();
+        let board =
+            serde_json::json!({ "version": 1, "widgets": [{ "id": "w1", "type": "footswitch" }] });
+        s.set_pedalboard(board.clone());
+        let (patch, _) = s.to_patch("Board");
+        let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap();
+        assert_eq!(t.view().pedalboard, board);
+        t.reset_graph().unwrap();
+        assert!(
+            t.view().pedalboard.is_null(),
+            "a new rig starts with an empty board"
+        );
     }
 
     #[test]

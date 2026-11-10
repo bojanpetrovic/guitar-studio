@@ -53,6 +53,9 @@ pub struct Patch {
     pub metronome: Option<MetronomeSettings>,
     pub nodes: Vec<PatchNode>,
     pub edges: Vec<(NodeId, NodeId)>,
+    /// The preset's pedalboard layout. Owned by the UI; the engine stores it as-is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedalboard: Option<serde_json::Value>,
 }
 
 impl Patch {
@@ -241,6 +244,7 @@ mod tests {
             metronome: None,
             nodes: vec![],
             edges: vec![],
+            pedalboard: None,
         }
     }
 

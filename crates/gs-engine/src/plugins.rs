@@ -212,6 +212,60 @@ pub struct PluginSlot {
     pub plugin: Box<dyn Plugin<f32>>,
     pub io: PluginIo,
     pub descriptor: PluginDescriptor,
+    /// Parameter metadata, read once at load. Index = the plugin's parameter index.
+    pub params: Vec<ParamInfo>,
+}
+
+/// A plugin parameter as the UI sees it. `id` is the format's stable parameter id
+/// (what pedalboard bindings store); values are in the parameter's native range.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParamInfo {
+    pub index: usize,
+    pub id: u32,
+    pub name: String,
+    pub unit: String,
+    pub min: f64,
+    pub max: f64,
+    pub default: f64,
+    /// Number of discrete values (0 = continuous).
+    pub steps: u32,
+    pub is_bypass: bool,
+}
+
+impl PluginSlot {
+    pub fn param_index(&self, id: u32) -> Option<usize> {
+        self.params.iter().position(|p| p.id == id)
+    }
+}
+
+fn read_params(plugin: &dyn Plugin<f32>) -> Vec<ParamInfo> {
+    use truce_rack::core::info::ParameterFlags;
+    (0..plugin.parameter_count())
+        .filter_map(|index| {
+            let p = plugin.parameter_info(index).ok()?;
+            if p.flags.contains(ParameterFlags::HIDDEN)
+                || p.flags.contains(ParameterFlags::READ_ONLY)
+            {
+                return None;
+            }
+            Some(ParamInfo {
+                index,
+                id: p.id,
+                name: if p.name.is_empty() {
+                    format!("Param {index}")
+                } else {
+                    p.name
+                },
+                unit: p.unit,
+                min: p.min,
+                max: p.max,
+                default: p.default,
+                steps: p.step_count,
+                is_bypass: p.flags.contains(ParameterFlags::BYPASS),
+            })
+        })
+        .collect()
 }
 
 pub type SharedPlugin = Arc<Mutex<PluginSlot>>;
@@ -247,10 +301,12 @@ pub fn load_plugin(
         accepts_midi: live.accepts_midi || desc.accepts_midi,
         ..desc.clone()
     };
+    let params = read_params(plugin.as_ref());
     Ok(PluginSlot {
         plugin,
         io,
         descriptor,
+        params,
     })
 }
 

@@ -31,6 +31,23 @@ exactly.
 - If a plugin in a preset isn't installed, the rest of the rig still loads, and a
   warning names the missing plugin.
 
+## Pedalboard
+
+Every preset can have its own pedalboard: a control surface you lay out yourself and
+wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
+
+- **Edit mode** has a palette of footswitches, knobs, faders, selectors, meters,
+  labels, pedal enclosures and a tuner display. Drag to move, pull a corner to
+  resize; everything snaps to the grid. ⌫ deletes, ⌘D duplicates, arrow keys nudge.
+- **Wiring:** select a control and choose what it drives in the inspector. Options are
+  any plugin parameter (searchable), a node's bypass or level, metronome on/off, tap
+  tempo, tempo, or the tuner. Meters can show any node's output or the main out.
+- **Build from rig** creates one pedal per plugin in signal order. Each gets an on/off
+  footswitch, its two main knobs and an amp/channel selector where the plugin has
+  one. The board also gets tap tempo, a tuner and an output meter.
+- **Play mode:** controls change the sound right away, and knobs follow changes you
+  make inside the plugin's own window.
+
 ## Layout
 
 | Path | What |
@@ -58,15 +75,15 @@ exactly.
 make check                              # fmt-check + clippy + tsc + tests (what CI should run)
 make smoke FORMAT=au PLUGIN=nolly       # load, process and state-round-trip a plugin headless
 make preset-test FORMAT=au PLUGIN=nolly # save and reload a rig with a real plugin
+make param-test FORMAT=au PLUGIN=nolly  # set and read back a plugin's parameters through the engine
+make params FORMAT=au PLUGIN=nolly      # list a plugin's parameters (ids for pedalboard bindings)
 make scan                               # rescan plugins into the app's cache
 make reset-settings                     # forget the saved audio device and plugin cache
 ```
 
 ## Not done yet
 
-- VST3: forwarding edits made in a plugin's editor to its audio processor (`IComponentHandler`).
-  This affects plugins built with separate component and controller parts. JUCE plugins such as
-  Neural DSP's don't need it. Prefer the AU version on macOS until it's fixed.
+- MIDI foot-controller mapping for pedalboard controls (MIDI learn)
 - An unsaved-changes indicator
 - Plugin delay compensation on parallel branches
 - MIDI foot-controller mapping

@@ -199,6 +199,33 @@ fn open_editor(app: AppHandle, state: State<AppState>, id: u32) -> CmdResult<()>
     editor::open(&app, &state, id).map_err(|e| format!("{e:#}"))
 }
 
+// ---------------------------------------------------------------- pedalboard
+
+#[tauri::command]
+fn plugin_params(state: State<AppState>, id: u32) -> CmdResult<Vec<gs_engine::plugins::ParamInfo>> {
+    state.studio.lock().plugin_params(id).map_err(err)
+}
+
+#[tauri::command]
+fn set_plugin_param(state: State<AppState>, id: u32, param_id: u32, value: f64) -> CmdResult<()> {
+    state
+        .studio
+        .lock()
+        .set_plugin_param(id, param_id, value)
+        .map_err(err)
+}
+
+/// `items` = `[node, paramId]` pairs; answers in the same order (`null` = gone).
+#[tauri::command]
+fn get_param_values(state: State<AppState>, items: Vec<(u32, u32)>) -> Vec<Option<f64>> {
+    state.studio.lock().param_values(&items)
+}
+
+#[tauri::command]
+fn set_pedalboard(state: State<AppState>, board: serde_json::Value) {
+    state.studio.lock().set_pedalboard(board);
+}
+
 // ---------------------------------------------------------------- metronome & tuner
 
 #[tauri::command]
@@ -290,6 +317,10 @@ pub fn run() {
             open_editor,
             set_metronome,
             set_tuner,
+            plugin_params,
+            set_plugin_param,
+            get_param_values,
+            set_pedalboard,
             presets::list_presets,
             presets::save_preset,
             presets::load_preset,

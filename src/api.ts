@@ -65,6 +65,8 @@ export interface StudioView {
   metronome: MetronomeSettings;
   tunerEnabled: boolean;
   referenceA4: number;
+  /** Pedalboard layout for this rig (null until one is created). */
+  pedalboard: unknown;
 }
 
 export interface DeviceInfo {
@@ -101,6 +103,18 @@ export interface Telemetry {
   beat: number;
   beatCounter: number;
   tuner: TunerReading | null;
+}
+
+export interface ParamInfo {
+  index: number;
+  id: number;
+  name: string;
+  unit: string;
+  min: number;
+  max: number;
+  default: number;
+  steps: number;
+  isBypass: boolean;
 }
 
 export interface PresetInfo {
@@ -147,6 +161,12 @@ export const api = {
   setMetronome: (settings: MetronomeSettings) => invoke<void>("set_metronome", { settings }),
   setTuner: (enabled: boolean, referenceA4?: number) =>
     invoke<void>("set_tuner", { enabled, referenceA4: referenceA4 ?? null }),
+
+  pluginParams: (id: number) => invoke<ParamInfo[]>("plugin_params", { id }),
+  setPluginParam: (id: number, paramId: number, value: number) =>
+    invoke<void>("set_plugin_param", { id, paramId, value }),
+  getParamValues: (items: [number, number][]) => invoke<(number | null)[]>("get_param_values", { items }),
+  setPedalboard: (board: unknown) => invoke<void>("set_pedalboard", { board }),
 
   listPresets: () => invoke<PresetList>("list_presets"),
   savePreset: (name: string, overwrite = false) =>
