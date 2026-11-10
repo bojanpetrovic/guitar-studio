@@ -2,6 +2,7 @@
 // view and floats under the board on stage. It also owns the transport keys:
 //   Space      start / stop the metronome
 //   ↑ / ↓      ±1 BPM (⇧ ±5)
+//   1 – 9      switch scene
 // (← / → are left for switching presets on stage.)
 import { useEffect, useRef } from "react";
 import { Minus, Pause, Play, Plus, Power, Volume2 } from "lucide-react";
@@ -152,11 +153,13 @@ function DockMetronome() {
   );
 }
 
-/** Space and ↑ / ↓ drive the metronome from anywhere except text fields. */
+/** Space, ↑ / ↓ and 1-9 work from anywhere except text fields. */
 function useTransportKeys() {
   const { studio, actions } = useStudio();
   const metro = useRef(studio.metronome);
   metro.current = studio.metronome;
+  const sceneCount = useRef(studio.scenes.length);
+  sceneCount.current = studio.scenes.length;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -164,6 +167,16 @@ function useTransportKeys() {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest?.("input, textarea, select, [contenteditable='true'], .modal")) return;
+
+      const digit = /^Digit([1-9])$|^Numpad([1-9])$/.exec(e.code);
+      if (digit && !e.shiftKey) {
+        const index = Number(digit[1] ?? digit[2]) - 1;
+        if (index < sceneCount.current) {
+          e.preventDefault();
+          if (!e.repeat) actions.selectScene(index);
+        }
+        return;
+      }
 
       const m = metro.current;
       if (e.code === "Space") {
@@ -198,7 +211,7 @@ export default function Dock() {
       <DockMetronome />
       <span className="dock-hint muted">
         <kbd>Space</kbd> start/stop · <kbd>↑</kbd>
-        <kbd>↓</kbd> tempo
+        <kbd>↓</kbd> tempo · <kbd>1</kbd>–<kbd>9</kbd> scenes
       </span>
     </footer>
   );

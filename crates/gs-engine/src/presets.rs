@@ -8,6 +8,7 @@ use crate::graph::NodeId;
 use crate::metronome::MetronomeSettings;
 use crate::nodes::MAX_BLOCK;
 use crate::plugins::{self, PluginDescriptor, PluginSlot};
+use crate::scenes::Scene;
 use crate::studio::NodeType;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine as _;
@@ -81,6 +82,12 @@ pub struct Patch {
     /// The preset's pedalboard layout. Owned by the UI; the engine stores it as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pedalboard: Option<serde_json::Value>,
+    /// Named snapshots of plugin parameters (see [`crate::scenes`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<Scene>,
+    /// The scene the rig was in when saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_scene: Option<usize>,
 }
 
 impl Patch {
@@ -270,6 +277,8 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             pedalboard: None,
+            scenes: vec![],
+            active_scene: None,
         }
     }
 

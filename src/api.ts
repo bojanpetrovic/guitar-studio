@@ -80,6 +80,9 @@ export interface StudioView {
   referenceA4: number;
   /** Pedalboard layout for this rig (null until one is created). */
   pedalboard: unknown;
+  /** Scene names in order; number keys 1-9 pick them. */
+  scenes: string[];
+  activeScene: number | null;
 }
 
 export interface DeviceInfo {
@@ -155,6 +158,9 @@ export const PRESET_EXISTS = "PRESET_EXISTS";
 
 // ---------------------------------------------------------------- commands
 
+/** Must match gs_engine::scenes::MAX_SCENES (one per number key). */
+export const MAX_SCENES = 9;
+
 export const api = {
   getStudio: () => invoke<StudioView>("get_studio"),
   listDevices: () => invoke<DeviceList>("list_devices"),
@@ -184,6 +190,10 @@ export const api = {
     invoke<void>("set_plugin_param", { id, paramId, value }),
   getParamValues: (items: [number, number][]) => invoke<(number | null)[]>("get_param_values", { items }),
   setPedalboard: (board: unknown) => invoke<void>("set_pedalboard", { board }),
+  addScene: (name?: string) => invoke<StudioView>("add_scene", { name: name ?? null }),
+  selectScene: (index: number) => invoke<StudioView>("select_scene", { index }),
+  renameScene: (index: number, name: string) => invoke<StudioView>("rename_scene", { index, name }),
+  deleteScene: (index: number) => invoke<StudioView>("delete_scene", { index }),
 
   listPresets: () => invoke<PresetList>("list_presets"),
   savePreset: (name: string, overwrite = false) =>

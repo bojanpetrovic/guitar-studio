@@ -6,6 +6,7 @@ use crate::metronome::{MetronomeSettings, MetronomeShared};
 use crate::nodes::{GainNode, InputNode, MAX_BLOCK, NodeShared, PluginNode, Processor};
 use crate::plugins::{self, ParamInfo, PluginDescriptor, PluginSlot, SharedPlugin};
 use crate::presets::{self, MixerStrip, Patch, PatchNode};
+use crate::scenes::{self, MAX_SCENES, Scene};
 use crate::tuner::{self, TunerReading, TunerShared, TunerThread};
 use crate::util::db_to_gain;
 use anyhow::{Result, anyhow, bail};
@@ -89,6 +90,9 @@ pub struct StudioView {
     pub reference_a4: f32,
     /// The current pedalboard layout (opaque to the engine; `null` = none yet).
     pub pedalboard: serde_json::Value,
+    /// Scene names, in order (number keys 1-9 pick them).
+    pub scenes: Vec<String>,
+    pub active_scene: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +138,8 @@ pub struct Studio {
     tuner_channel: Arc<AtomicU32>,
     _tuner_thread: Option<TunerThread>,
     pedalboard: serde_json::Value,
+    scenes: Vec<Scene>,
+    active_scene: Option<usize>,
 }
 
 impl Default for Studio {
@@ -166,6 +172,8 @@ impl Studio {
             tuner_channel: Arc::new(AtomicU32::new(0)),
             _tuner_thread: None,
             pedalboard: serde_json::Value::Null,
+            scenes: Vec::new(),
+            active_scene: None,
         };
         let input = s.insert_node(NodeType::Input, 0.0, 0.0, 0.0, None);
         let output = s.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
@@ -309,6 +317,9 @@ impl Studio {
         self.edges.retain(|(a, b)| *a != id && *b != id);
         for n in self.nodes.values_mut() {
             n.strips.remove(&id);
+        }
+        for scene in &mut self.scenes {
+            scene.forget_node(id);
         }
         self.rebuild()?;
         Ok(node.plugin)
@@ -564,6 +575,9 @@ impl Studio {
             nodes,
             edges: self.edges.clone(),
             pedalboard: (!self.pedalboard.is_null()).then(|| self.pedalboard.clone()),
+            // The live sound belongs to the active scene; save it there too.
+            scenes: self.scenes_with_live_capture(),
+            active_scene: self.active_scene,
         };
         (patch, warnings)
     }
@@ -627,6 +641,9 @@ impl Studio {
         self.audio = audio;
 
         self.pedalboard = patch.pedalboard.clone().unwrap_or(serde_json::Value::Null);
+        // Plugin states already hold the active scene's sound; nothing to apply.
+        self.scenes = patch.scenes.iter().take(MAX_SCENES).cloned().collect();
+        self.active_scene = patch.active_scene.filter(|&i| i < self.scenes.len());
         if let Some(m) = &patch.metronome {
             self.metronome.apply(&MetronomeSettings {
                 enabled: self.metronome.settings().enabled,
@@ -673,6 +690,8 @@ impl Studio {
             ],
             edges: vec![(1, 2)],
             pedalboard: None,
+            scenes: vec![],
+            active_scene: None,
         };
         self.apply_patch(&blank, HashMap::new())
     }
@@ -705,12 +724,13 @@ impl Studio {
         let info = &slot.params[index];
         let value = value.clamp(info.min.min(info.max), info.max.max(info.min));
         let plugin_index = info.index;
-        slot.plugin.set_parameter(plugin_index, value)?;
+        slot.write_param(plugin_index, value)?;
         Ok(())
     }
 
     /// Current values for `(node, param id)` pairs; `None` where the node or parameter
-    /// no longer exists. Each plugin is locked once for all of its parameters.
+    /// no longer exists. Each plugin is locked once for all of its parameters; right
+    /// after a write the cached values are returned (see [`plugins::READ_QUIET`]).
     pub fn param_values(&self, items: &[(NodeId, u32)]) -> Vec<Option<f64>> {
         let mut out = vec![None; items.len()];
         let mut by_node: BTreeMap<NodeId, Vec<usize>> = BTreeMap::new();
@@ -721,14 +741,162 @@ impl Studio {
             let Some(plugin) = self.plugin(node) else {
                 continue;
             };
-            let slot = plugin.lock();
+            let mut slot = plugin.lock();
             for i in idxs {
-                out[i] = slot
-                    .param_index(items[i].1)
-                    .and_then(|pi| slot.plugin.parameter_value(slot.params[pi].index).ok());
+                out[i] = slot.param_index(items[i].1).and_then(|pi| {
+                    let index = slot.params[pi].index;
+                    slot.param_value_now(index)
+                });
             }
         }
         out
+    }
+
+    // ------------------------------------------------------------------ scenes
+
+    /// Snapshot the rig's sound into a scene called `name`: plugin parameters and
+    /// on/off state, Gain / Mixer levels and mixer strips.
+    fn capture(&self, name: String) -> Scene {
+        let mut scene = Scene {
+            name,
+            ..Default::default()
+        };
+        for (id, node) in &self.nodes {
+            if let Some(plugin) = &node.plugin {
+                scene.params.insert(*id, scenes::read_params(plugin));
+                scene
+                    .bypass
+                    .insert(*id, node.shared.bypass.load(Ordering::Relaxed));
+            }
+            if matches!(node.kind, NodeType::Gain | NodeType::Mixer) {
+                scene.levels.insert(*id, node.gain_db);
+            }
+            if node.kind == NodeType::Mixer {
+                scene.strips.insert(*id, self.connected_strips(*id));
+            }
+        }
+        scene
+    }
+
+    /// Put one mixer strip's volume, pan and mute back, if that cable still exists.
+    fn restore_strip(&mut self, mixer: NodeId, st: &MixerStrip) {
+        if self.edges.contains(&(st.source, mixer)) {
+            let mute = if st.mute { 1.0 } else { 0.0 };
+            let _ = self.set_mixer_strip(mixer, st.source, "gainDb", st.gain_db);
+            let _ = self.set_mixer_strip(mixer, st.source, "pan", st.pan);
+            let _ = self.set_mixer_strip(mixer, st.source, "mute", mute);
+        }
+    }
+
+    /// The scene list with the active scene refreshed from the live sound.
+    fn scenes_with_live_capture(&self) -> Vec<Scene> {
+        let mut list = self.scenes.clone();
+        if let Some(scene) = self.active_scene.and_then(|i| list.get_mut(i)) {
+            *scene = self.capture(std::mem::take(&mut scene.name));
+        }
+        list
+    }
+
+    /// Store the live sound in the active scene (so tweaks made in a scene stick).
+    /// Returns the live snapshot either way.
+    fn save_active_scene(&mut self) -> Scene {
+        let live = self.capture(String::new());
+        if let Some(scene) = self.active_scene.and_then(|i| self.scenes.get_mut(i)) {
+            *scene = Scene {
+                name: std::mem::take(&mut scene.name),
+                ..live.clone()
+            };
+        }
+        live
+    }
+
+    /// Add a scene holding the current sound and make it active. Returns its index.
+    pub fn add_scene(&mut self, name: Option<&str>) -> Result<usize> {
+        if self.scenes.len() >= MAX_SCENES {
+            bail!("a rig can have up to {MAX_SCENES} scenes");
+        }
+        let live = self.save_active_scene();
+        let name = name
+            .map(scenes::clean_name)
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| scenes::next_name(&self.scenes));
+        self.scenes.push(Scene { name, ..live });
+        let index = self.scenes.len() - 1;
+        self.active_scene = Some(index);
+        Ok(index)
+    }
+
+    /// Switch to scene `index`: the live sound is kept in the scene being left, then
+    /// only the parameters that differ from it are set (each plugin call takes the
+    /// plugin's lock on its own, so the audio thread keeps running). Selecting the
+    /// active scene is a no-op.
+    pub fn select_scene(&mut self, index: usize) -> Result<()> {
+        if index >= self.scenes.len() {
+            bail!("there is no scene {}", index + 1);
+        }
+        if self.active_scene == Some(index) {
+            return Ok(());
+        }
+        let live = self.save_active_scene();
+        let scene = self.scenes[index].clone();
+        let none = BTreeMap::new();
+        for (id, node) in &self.nodes {
+            let Some(plugin) = &node.plugin else {
+                continue;
+            };
+            // Plugins added after the scene was made keep their current settings.
+            if let Some(values) = scene.params.get(id) {
+                scenes::write_params(plugin, values, live.params.get(id).unwrap_or(&none));
+            }
+            if let Some(&bypass) = scene.bypass.get(id) {
+                node.shared.bypass.store(bypass, Ordering::Relaxed);
+            }
+        }
+        // Built-in nodes: levels, then mixer strips (gains ramp, so no clicks).
+        for (&id, &db) in &scene.levels {
+            let builtin = self
+                .nodes
+                .get(&id)
+                .is_some_and(|n| matches!(n.kind, NodeType::Gain | NodeType::Mixer));
+            if builtin {
+                let _ = self.set_param(id, "gainDb", db);
+            }
+        }
+        for (&mixer, strips) in &scene.strips {
+            for st in strips {
+                self.restore_strip(mixer, st);
+            }
+        }
+        self.active_scene = Some(index);
+        Ok(())
+    }
+
+    pub fn rename_scene(&mut self, index: usize, name: &str) -> Result<()> {
+        let name = scenes::clean_name(name);
+        if name.is_empty() {
+            bail!("scene names can't be empty");
+        }
+        let scene = self
+            .scenes
+            .get_mut(index)
+            .ok_or_else(|| anyhow!("there is no scene {}", index + 1))?;
+        scene.name = name;
+        Ok(())
+    }
+
+    /// Remove a scene. The sound doesn't change; if it was the active scene, no scene
+    /// is active until one is picked.
+    pub fn delete_scene(&mut self, index: usize) -> Result<()> {
+        if index >= self.scenes.len() {
+            bail!("there is no scene {}", index + 1);
+        }
+        self.scenes.remove(index);
+        self.active_scene = match self.active_scene {
+            Some(a) if a == index => None,
+            Some(a) if a > index => Some(a - 1),
+            other => other,
+        };
+        Ok(())
     }
 
     // ------------------------------------------------------------- metronome / tuner
@@ -779,6 +947,8 @@ impl Studio {
             tuner_enabled: self.tuner_enabled.load(Ordering::Relaxed),
             reference_a4: self.tuner.reference_a4.load(),
             pedalboard: self.pedalboard.clone(),
+            scenes: self.scenes.iter().map(|s| s.name.clone()).collect(),
+            active_scene: self.active_scene,
         }
     }
 
@@ -900,6 +1070,103 @@ mod tests {
         let v = s.view();
         assert_eq!(v.nodes.len(), 2);
         assert!(v.edges.is_empty());
+    }
+
+    #[test]
+    fn scenes_keep_order_names_and_travel_with_presets() {
+        let mut s = Studio::new();
+        assert_eq!(s.add_scene(None).unwrap(), 0);
+        assert_eq!(s.add_scene(Some("  Lead  ")).unwrap(), 1);
+        s.add_scene(None).unwrap();
+        assert_eq!(s.view().scenes, ["Scene 1", "Lead", "Scene 2"]);
+        assert_eq!(s.view().active_scene, Some(2));
+
+        s.select_scene(0).unwrap();
+        assert!(s.select_scene(7).is_err());
+        s.rename_scene(0, "Clean").unwrap();
+        assert!(s.rename_scene(0, "   ").is_err());
+
+        // Deleting before the active scene shifts it; deleting it clears it.
+        s.select_scene(2).unwrap();
+        s.delete_scene(0).unwrap();
+        assert_eq!(s.view().active_scene, Some(1));
+        s.delete_scene(1).unwrap();
+        assert_eq!(s.view().active_scene, None);
+
+        while s.view().scenes.len() < MAX_SCENES {
+            s.add_scene(None).unwrap();
+        }
+        assert!(s.add_scene(None).is_err(), "one scene per number key");
+
+        let (patch, _) = s.to_patch("Scenes");
+        let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap();
+        assert_eq!(t.view().scenes, s.view().scenes);
+        assert_eq!(t.view().active_scene, s.view().active_scene);
+        t.reset_graph().unwrap();
+        assert!(t.view().scenes.is_empty());
+    }
+
+    #[test]
+    fn scenes_switch_mixer_strips_and_levels() {
+        // Input → A, Input → B, A → Mix, B → Mix, Mix → Output
+        let mut s = Studio::new();
+        let a = s.add_gain_node(0.0, 0.0).unwrap();
+        let b = s.add_gain_node(0.0, 0.0).unwrap();
+        let mix = s.add_mixer_node(0.0, 0.0).unwrap();
+        s.disconnect(1, 2).unwrap();
+        for (f, t) in [(1, a), (1, b), (a, mix), (b, mix), (mix, 2)] {
+            s.connect(f, t).unwrap();
+        }
+        let strip = |s: &Studio, src: NodeId| {
+            let node = s.view().nodes.into_iter().find(|n| n.id == mix).unwrap();
+            node.strips.into_iter().find(|st| st.source == src).unwrap()
+        };
+        let level =
+            |s: &Studio, id: NodeId| s.view().nodes.iter().find(|n| n.id == id).unwrap().gain_db;
+
+        // Scene 1: A loud and left, B muted, gain A at -3, mixer at -1.
+        s.add_scene(Some("Rhythm")).unwrap();
+        s.set_mixer_strip(mix, a, "gainDb", 2.0).unwrap();
+        s.set_mixer_strip(mix, a, "pan", -0.5).unwrap();
+        s.set_mixer_strip(mix, b, "mute", 1.0).unwrap();
+        s.set_param(a, "gainDb", -3.0).unwrap();
+        s.set_param(mix, "gainDb", -1.0).unwrap();
+
+        // Scene 2 starts as a copy; make it the opposite.
+        s.add_scene(Some("Lead")).unwrap();
+        s.set_mixer_strip(mix, a, "mute", 1.0).unwrap();
+        s.set_mixer_strip(mix, b, "mute", 0.0).unwrap();
+        s.set_mixer_strip(mix, b, "pan", 0.7).unwrap();
+        s.set_param(a, "gainDb", 0.0).unwrap();
+        s.set_param(mix, "gainDb", 3.0).unwrap();
+
+        s.select_scene(0).unwrap();
+        let (sa, sb) = (strip(&s, a), strip(&s, b));
+        assert_eq!((sa.gain_db, sa.pan, sa.mute), (2.0, -0.5, false));
+        assert!(sb.mute);
+        assert_eq!((level(&s, a), level(&s, mix)), (-3.0, -1.0));
+
+        s.select_scene(1).unwrap();
+        let (sa, sb) = (strip(&s, a), strip(&s, b));
+        assert!(sa.mute);
+        assert_eq!((sb.pan, sb.mute), (0.7, false));
+        assert_eq!((level(&s, a), level(&s, mix)), (0.0, 3.0));
+
+        // Saved and reloaded, the scenes still switch the mixer.
+        let (patch, _) = s.to_patch("Mix scenes");
+        let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap();
+        t.select_scene(0).unwrap();
+        assert!(strip(&t, b).mute);
+        assert_eq!(level(&t, mix), -1.0);
+
+        // A removed source disappears from every scene.
+        t.remove_node(b).unwrap();
+        t.select_scene(1).unwrap();
+        assert!(strip(&t, a).mute);
     }
 
     #[test]

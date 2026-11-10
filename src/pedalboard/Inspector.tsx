@@ -138,6 +138,14 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
             ))}
           </div>
         </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={board.showScenes !== false}
+            onChange={(e) => onBoardChange({ ...board, showScenes: e.target.checked })}
+          />
+          <span>Show scenes under the board</span>
+        </label>
         <button className="btn" onClick={onGenerate}>
           <WandSparkles size={14} /> Build from rig
         </button>

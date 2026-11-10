@@ -808,7 +808,7 @@ select {
 .banner {
   position: absolute;
   z-index: 10;
-  top: 14px;
+  top: 62px; /* under the scene bar */
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -2460,6 +2460,9 @@ select {
   background: color-mix(in srgb, var(--panel-2) 94%, transparent);
   box-shadow: var(--shadow);
 }
+.dock > * {
+  flex: none;
+}
 .dock-sep {
   width: 1px;
   height: 26px;
@@ -2609,6 +2612,7 @@ select {
   height: 26px;
 }
 select.dock-select {
+  min-width: 60px;
   height: 26px;
   padding: 0 22px 0 8px;
   font-size: 12px;
@@ -2640,7 +2644,7 @@ select.dock-select {
 }
 
 /* narrow docks drop the extras first */
-@container (max-width: 1060px) {
+@container (max-width: 1300px) {
   .dock-hint {
     display: none;
   }
@@ -2662,4 +2666,162 @@ select.dock-select {
   .beat-dots {
     display: none;
   }
+}
+
+/* ============================================================ scenes */
+.scenebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* Rig view: a floating pill at the top of the canvas. */
+.scenebar.on-canvas {
+  position: absolute;
+  z-index: 9;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 40px);
+  padding: 5px 6px 5px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-2) 90%, transparent);
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  overflow-x: auto;
+}
+.scenebar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+/* Pedalboard: a row of buttons under the board (SCENE_BAR_H = 50px tall). */
+.scenebar.on-board {
+  flex: none;
+  height: 50px;
+  justify-content: center;
+  padding: 0 14px 10px;
+  overflow-x: auto;
+}
+.pedalboard:not(.on-stage) .scenebar.on-board {
+  padding-top: 0;
+}
+.scene {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px 0 9px;
+  border-radius: 9px;
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.scene:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+.scene.on {
+  color: var(--text);
+  border-color: rgb(var(--accent-rgb) / 0.65);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.12);
+}
+.scene-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgb(var(--ink) / 0.06);
+}
+.scene.on .scene-key {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.scene-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-led {
+  display: none;
+}
+.scene.add {
+  padding: 0 9px;
+  color: var(--muted);
+  border-style: dashed;
+  background: transparent;
+}
+.scene.add.first {
+  color: var(--text-2);
+}
+.scene.editing {
+  gap: 4px;
+  padding: 0 4px 0 9px;
+  cursor: default;
+  border-color: rgb(var(--accent-rgb) / 0.5);
+}
+.scene-input {
+  width: 120px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.icon-btn.mini.danger:hover {
+  color: var(--red);
+}
+.scenebar-hint {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* Under the board the buttons are bigger and get an LED, like a switcher. */
+.scenebar.on-board .scene {
+  height: 36px;
+  padding: 0 14px 0 11px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.scenebar.on-board .scene-led {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--ink) / 0.15);
+  box-shadow: inset 0 1px 1px rgb(0 0 0 / calc(0.5 * var(--shade)));
+}
+.scenebar.on-board .scene.on .scene-led {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent), 0 0 12px rgb(var(--accent-rgb) / 0.6);
+}
+.scenebar.on-board .scene.add,
+.scenebar.on-board .scene.editing {
+  padding: 0 10px;
+}
+/* On stage the row floats between the board and the dock. */
+.pedalboard.on-stage .scenebar.on-board {
+  padding: 10px 0 0;
+}
+.pedalboard.on-stage .scenebar.on-board .scene:not(.on) {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
 }

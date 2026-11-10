@@ -68,6 +68,22 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
   or [ / ] switch presets), **Edit** and **Rig**. ⌘E, Esc or ⌘1 also leave the stage, and
   the window goes back to its old size and place.
 
+## Scenes
+
+A scene remembers every plugin's settings and on/off state, the Gain and Mixer
+levels, and each mixer input's volume, pan and mute, so one rig can hold a clean, a
+crunch and a lead sound. Press **1–9** (or click a scene) to switch; the
+scene bar sits at the top of the rig and under the pedalboard (Board → *Show scenes
+under the board* hides it there).
+
+- **+** adds a scene from the current sound (up to 9). Then shape the new scene.
+- Changes go into the active scene: switching away keeps what you did.
+- Double-click a scene to rename or delete it.
+- Scenes are saved with the preset. A plugin or cable added later keeps its settings
+  in older scenes until you change it there.
+- Switching only sets the parameters that differ, a parameter at a time, so the audio
+  keeps running (Archetype Nolly: ~11 ms; Pro-Q 3 / Timeless 3: ~1 ms).
+
 ## Tuner & metronome
 
 A slim dock under the canvas, always there (on stage too): note, a cents strip and
@@ -79,6 +95,7 @@ tempo, tap, time signature, subdivision and click volume. The tuner is on from l
 | Space | start / stop the metronome |
 | ↑ / ↓ | tempo ±1 BPM (⇧ ±5) |
 | ← / → | previous / next preset (on stage) |
+| 1 – 9 | switch scene |
 
 Keys are ignored while typing in a field; in the pedalboard editor the arrows move
 the selected control instead.
@@ -122,6 +139,7 @@ make check                              # fmt-check + clippy + tsc + tests (what
 make smoke FORMAT=au PLUGIN=nolly       # load, process and state-round-trip a plugin headless
 make preset-test FORMAT=au PLUGIN=nolly # save and reload a rig with a real plugin
 make param-test FORMAT=au PLUGIN=nolly  # set and read back a plugin's parameters through the engine
+make scene-test FORMAT=au PLUGIN=nolly  # switch scenes on a real plugin, save and reload them
 make params FORMAT=au PLUGIN=nolly      # list a plugin's parameters (ids for pedalboard bindings)
 make scan                               # rescan plugins into the app's cache
 make reset-settings                     # forget the saved audio device and plugin cache

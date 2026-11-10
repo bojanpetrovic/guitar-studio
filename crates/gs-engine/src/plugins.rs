@@ -8,9 +8,11 @@ use crate::nodes::MAX_PLUGIN_CHANNELS;
 use anyhow::{Context, Result, anyhow, bail};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use truce_rack::core::buffer::BusRange;
 use truce_rack::core::{BusKind, BusLayout, Plugin, PluginCategory, PluginInfo, PluginScanner};
 
@@ -214,7 +216,17 @@ pub struct PluginSlot {
     pub descriptor: PluginDescriptor,
     /// Parameter metadata, read once at load. Index = the plugin's parameter index.
     pub params: Vec<ParamInfo>,
+    /// Last value read or written per parameter index, served while reads would stall.
+    pub value_cache: HashMap<usize, f64>,
+    /// When a parameter was last written (see [`READ_QUIET`]).
+    pub last_write: Option<Instant>,
 }
+
+/// Some plugins (JUCE-based AUs such as Neural DSP's) block a parameter *read* for
+/// ~40 ms after a write. A read holds the plugin lock, so the audio thread would play
+/// dry for that long. For this long after a write we serve cached values instead, or
+/// wait it out (scene capture) before reading.
+pub const READ_QUIET: Duration = Duration::from_millis(60);
 
 /// A plugin parameter as the UI sees it. `id` is the format's stable parameter id
 /// (what pedalboard bindings store); values are in the parameter's native range.
@@ -236,6 +248,36 @@ pub struct ParamInfo {
 impl PluginSlot {
     pub fn param_index(&self, id: u32) -> Option<usize> {
         self.params.iter().position(|p| p.id == id)
+    }
+
+    /// Set a parameter (by the plugin's own index) and remember the value.
+    pub fn write_param(&mut self, index: usize, value: f64) -> Result<()> {
+        self.plugin.set_parameter(index, value)?;
+        self.value_cache.insert(index, value);
+        self.last_write = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Read a parameter, remembering the value.
+    pub fn read_param(&mut self, index: usize) -> Option<f64> {
+        let v = self.plugin.parameter_value(index).ok()?;
+        self.value_cache.insert(index, v);
+        Some(v)
+    }
+
+    /// The last known value: a fresh read, or the cached one while reads would stall.
+    pub fn param_value_now(&mut self, index: usize) -> Option<f64> {
+        if self.read_wait().is_some() {
+            self.value_cache.get(&index).copied()
+        } else {
+            self.read_param(index)
+        }
+    }
+
+    /// How long until reading is safe again after a write, if it isn't yet.
+    pub fn read_wait(&self) -> Option<Duration> {
+        let since = self.last_write?.elapsed();
+        READ_QUIET.checked_sub(since).filter(|d| !d.is_zero())
     }
 }
 
@@ -307,6 +349,8 @@ pub fn load_plugin(
         io,
         descriptor,
         params,
+        value_cache: HashMap::new(),
+        last_write: None,
     })
 }
 

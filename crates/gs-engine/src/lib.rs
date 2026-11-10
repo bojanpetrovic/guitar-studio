@@ -14,6 +14,7 @@ pub mod metronome;
 pub mod nodes;
 pub mod plugins;
 pub mod presets;
+pub mod scenes;
 pub mod studio;
 pub mod tuner;
 pub mod util;

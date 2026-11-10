@@ -21,6 +21,7 @@ import Inspector from "./Inspector";
 import { RuntimeContext, useParamRuntime } from "./runtime";
 import { WidgetView } from "./widgets";
 import { enterStage, exitStage } from "../stageWindow";
+import SceneBar, { SCENE_BAR_H } from "../components/SceneBar";
 import {
   ACCENTS,
   Board,
@@ -208,9 +209,10 @@ export default function PedalboardView() {
       exitStage();
     };
   }, [stage, actions]);
+  const showScenes = board.showScenes !== false;
   useEffect(() => {
-    if (stage) enterStage(board.width / board.height, STAGE_DOCK_H);
-  }, [stage, board.width, board.height]);
+    if (stage) enterStage(board.width / board.height, STAGE_DOCK_H + (showScenes ? SCENE_BAR_H : 0));
+  }, [stage, board.width, board.height, showScenes]);
 
   // ⌘E flips between playing and designing; Esc leaves the stage for the editor.
   useEffect(() => {
@@ -492,6 +494,7 @@ export default function PedalboardView() {
             />
           )}
         </div>
+        {showScenes && <SceneBar variant="board" />}
       </div>
     </RuntimeContext.Provider>
   );

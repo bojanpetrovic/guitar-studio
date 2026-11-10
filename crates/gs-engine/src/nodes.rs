@@ -237,18 +237,31 @@ impl Processor for PluginNode {
     }
 }
 
-/// Try to take a plugin's lock without blocking: spin for a few microseconds, which
-/// covers the control thread's short critical sections (parameter writes and reads
-/// from the pedalboard). Long holds (editor open, state save) still fall back to
-/// dry pass-through rather than stalling the audio thread.
+/// How long the audio thread will spin for a plugin's lock before giving up on the
+/// block. Covers the control thread's single-parameter critical sections (a slow AU
+/// such as a JUCE amp sim takes ~70 µs per parameter call) while staying a small
+/// slice of even a 64-frame block (1.3 ms at 48 kHz).
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_micros(250);
+
+/// Try to take a plugin's lock without blocking: spin for at most [`LOCK_WAIT`], which
+/// covers the control thread's short critical sections (one parameter read or write
+/// at a time from the pedalboard and scenes). Long holds (editor open, state save)
+/// still fall back to dry pass-through rather than stalling the audio thread.
 fn lock_briefly(
     plugin: &SharedPlugin,
 ) -> Option<parking_lot::MutexGuard<'_, crate::plugins::PluginSlot>> {
-    for _ in 0..512 {
+    if let Some(guard) = plugin.try_lock() {
+        return Some(guard);
+    }
+    // `Instant` is a plain clock read on macOS (no syscall), fine on the audio thread.
+    let start = std::time::Instant::now();
+    loop {
+        std::hint::spin_loop();
         if let Some(guard) = plugin.try_lock() {
             return Some(guard);
         }
-        std::hint::spin_loop();
+        if start.elapsed() > LOCK_WAIT {
+            return None;
+        }
     }
-    None
 }

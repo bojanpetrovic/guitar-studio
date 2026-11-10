@@ -250,6 +250,37 @@ fn set_window_buttons(window: tauri::WebviewWindow, visible: bool) -> CmdResult<
     Ok(())
 }
 
+// ---------------------------------------------------------------- scenes
+
+#[tauri::command]
+fn add_scene(state: State<AppState>, name: Option<String>) -> CmdResult<StudioView> {
+    let mut studio = state.studio.lock();
+    studio.add_scene(name.as_deref()).map_err(err)?;
+    Ok(studio.view())
+}
+
+/// Sync (main thread): JUCE plugins apply parameter changes on the main run loop.
+#[tauri::command]
+fn select_scene(state: State<AppState>, index: usize) -> CmdResult<StudioView> {
+    let mut studio = state.studio.lock();
+    studio.select_scene(index).map_err(err)?;
+    Ok(studio.view())
+}
+
+#[tauri::command]
+fn rename_scene(state: State<AppState>, index: usize, name: String) -> CmdResult<StudioView> {
+    let mut studio = state.studio.lock();
+    studio.rename_scene(index, &name).map_err(err)?;
+    Ok(studio.view())
+}
+
+#[tauri::command]
+fn delete_scene(state: State<AppState>, index: usize) -> CmdResult<StudioView> {
+    let mut studio = state.studio.lock();
+    studio.delete_scene(index).map_err(err)?;
+    Ok(studio.view())
+}
+
 // ---------------------------------------------------------------- pedalboard
 
 #[tauri::command]
@@ -369,6 +400,10 @@ pub fn run() {
             move_node,
             open_editor,
             set_window_buttons,
+            add_scene,
+            select_scene,
+            rename_scene,
+            delete_scene,
             set_metronome,
             set_tuner,
             plugin_params,

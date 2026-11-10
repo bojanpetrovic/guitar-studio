@@ -55,6 +55,8 @@ export interface Board {
   height: number;
   surface: BoardSurface;
   widgets: Widget[];
+  /** Scene buttons under the board (on unless turned off). */
+  showScenes?: boolean;
 }
 
 export const GRID = 10;

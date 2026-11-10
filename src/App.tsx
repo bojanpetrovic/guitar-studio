@@ -54,6 +54,11 @@ export interface StudioActions {
   setView: (view: View) => void;
   /** The pedalboard is being played full-window (frameless); hide the studio chrome. */
   setStage: (on: boolean) => void;
+  /** Scenes: snapshots of every plugin's settings. Adding copies the current sound. */
+  addScene: () => Promise<void>;
+  selectScene: (index: number) => Promise<void>;
+  renameScene: (index: number, name: string) => Promise<boolean>;
+  deleteScene: (index: number) => Promise<void>;
 }
 
 export type View = "rig" | "board";
@@ -325,6 +330,23 @@ export default function App() {
       },
       setView,
       setStage,
+      addScene: async () => {
+        const v = await guard(() => api.addScene());
+        if (v) applyView(v);
+      },
+      selectScene: async (index) => {
+        const v = await guard(() => api.selectScene(index));
+        if (v) applyView(v);
+      },
+      renameScene: async (index, name) => {
+        const v = await guard(() => api.renameScene(index, name));
+        if (v) applyView(v);
+        return !!v;
+      },
+      deleteScene: async (index) => {
+        const v = await guard(() => api.deleteScene(index));
+        if (v) applyView(v);
+      },
       scan: async () => {
         const c = await guard(() => api.scanPlugins());
         if (c) {

@@ -17,6 +17,7 @@ import { useStudio } from "../App";
 import { api, NodeView } from "../api";
 import { useTheme } from "../themes";
 import StudioNode from "./StudioNode";
+import SceneBar from "./SceneBar";
 import SignalEdge from "./SignalEdge";
 import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER } from "./PluginBrowser";
 
@@ -146,6 +147,7 @@ export default function GraphCanvas() {
           maskColor="var(--minimap-mask)"
         />
       </ReactFlow>
+      <SceneBar variant="canvas" />
     </div>
   );
 }
