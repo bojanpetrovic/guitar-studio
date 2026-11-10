@@ -8,6 +8,8 @@ export type Binding =
   | { kind: "param"; node: number; paramId: number; paramName: string }
   | { kind: "bypass"; node: number }
   | { kind: "level"; node: number }
+  /** One strip of a Mixer node: volume, pan, or mute (footswitch). */
+  | { kind: "mix"; node: number; source: number; field: "gainDb" | "pan" | "mute" }
   | { kind: "meter"; node: number | "master" }
   | { kind: "metronome" }
   | { kind: "tap" }
@@ -74,9 +76,9 @@ export const WIDGET_META: Record<
   WidgetType,
   { name: string; w: number; h: number; minW: number; minH: number; bindings: BindingKind[] }
 > = {
-  footswitch: { name: "Footswitch", w: 100, h: 130, minW: 70, minH: 100, bindings: ["bypass", "param", "metronome", "tap", "tuner", "none"] },
-  knob: { name: "Knob", w: 90, h: 120, minW: 60, minH: 80, bindings: ["param", "level", "bpm", "none"] },
-  fader: { name: "Fader", w: 70, h: 200, minW: 50, minH: 120, bindings: ["param", "level", "bpm", "none"] },
+  footswitch: { name: "Footswitch", w: 100, h: 130, minW: 70, minH: 100, bindings: ["bypass", "param", "mix", "metronome", "tap", "tuner", "none"] },
+  knob: { name: "Knob", w: 90, h: 120, minW: 60, minH: 80, bindings: ["param", "level", "mix", "bpm", "none"] },
+  fader: { name: "Fader", w: 70, h: 200, minW: 50, minH: 120, bindings: ["param", "level", "mix", "bpm", "none"] },
   selector: { name: "Selector", w: 140, h: 130, minW: 90, minH: 60, bindings: ["param", "none"] },
   meter: { name: "Meter", w: 50, h: 180, minW: 30, minH: 80, bindings: ["meter"] },
   label: { name: "Label", w: 200, h: 44, minW: 40, minH: 24, bindings: [] },
@@ -89,6 +91,7 @@ export const BINDING_LABEL: Record<BindingKind, string> = {
   param: "Plugin parameter",
   bypass: "Bypass on/off",
   level: "Level (dB)",
+  mix: "Mixer channel",
   meter: "Signal level",
   metronome: "Metronome on/off",
   tap: "Tap tempo",

@@ -38,6 +38,31 @@ pub struct PatchNode {
     /// Base64 plugin state blob.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// Mixer nodes: one strip per connected input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strips: Vec<MixerStrip>,
+}
+
+/// A mixer input strip, keyed by the node feeding it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerStrip {
+    pub source: NodeId,
+    pub gain_db: f32,
+    pub pan: f32,
+    #[serde(default)]
+    pub mute: bool,
+}
+
+impl MixerStrip {
+    pub fn unity(source: NodeId) -> Self {
+        Self {
+            source,
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

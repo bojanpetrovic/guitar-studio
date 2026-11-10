@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Copy, Search, Trash2, WandSparkles, Eraser } from "lucide-react";
 import { useStudio } from "../App";
-import { NodeView } from "../api";
+import { nodeName, NodeView } from "../api";
 import { useResolved, useRuntime } from "./runtime";
 import {
   ACCENTS,
@@ -25,8 +25,7 @@ interface Props {
   onGenerate: () => void;
 }
 
-const nodeLabel = (n: NodeView) =>
-  n.plugin?.name ?? { input: "Guitar In", output: "Main Out", gain: "Gain", plugin: "Plugin" }[n.kind];
+const nodeLabel = (n: NodeView, all: NodeView[]) => nodeName(all, n.id);
 
 /** Which rig nodes make sense for a binding kind. */
 function candidates(kind: BindingKind, nodes: NodeView[]) {
@@ -35,6 +34,8 @@ function candidates(kind: BindingKind, nodes: NodeView[]) {
       return nodes.filter((n) => n.kind === "plugin");
     case "bypass":
       return nodes.filter((n) => n.kind === "plugin" || n.kind === "gain");
+    case "mix":
+      return nodes.filter((n) => n.kind === "mixer");
     case "level":
       return nodes;
     case "meter":
@@ -44,9 +45,13 @@ function candidates(kind: BindingKind, nodes: NodeView[]) {
   }
 }
 
-function defaultBinding(kind: BindingKind, nodes: NodeView[]): Binding {
+function defaultBinding(kind: BindingKind, nodes: NodeView[], widget: Widget): Binding {
   const first = candidates(kind, nodes)[0];
   switch (kind) {
+    case "mix":
+      return first
+        ? { kind, node: first.id, source: first.strips[0]?.source ?? -1, field: widget.type === "footswitch" ? "mute" : "gainDb" }
+        : { kind: "none" };
     case "param":
       return first ? { kind, node: first.id, paramId: -1, paramName: "" } : { kind: "none" };
     case "bypass":
@@ -197,7 +202,7 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
             <span>Target</span>
             <select
               value={b.kind}
-              onChange={(e) => set({ binding: defaultBinding(e.target.value as BindingKind, studio.nodes) })}
+              onChange={(e) => set({ binding: defaultBinding(e.target.value as BindingKind, studio.nodes, w) })}
             >
               {meta.bindings.map((k) => (
                 <option key={k} value={k}>
@@ -220,11 +225,60 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
                 {!nodes.some((n) => n.id === b.node) && <option value={b.node}>(missing)</option>}
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
-                    {nodeLabel(n)}
+                    {nodeLabel(n, studio.nodes)}
                   </option>
                 ))}
               </select>
             </label>
+          )}
+
+          {b.kind === "mix" && (
+            <>
+              <label className="insp-field">
+                <span>Mixer</span>
+                <select
+                  value={b.node}
+                  onChange={(e) => {
+                    const m = nodes.find((n) => n.id === Number(e.target.value));
+                    set({ binding: { ...b, node: Number(e.target.value), source: m?.strips[0]?.source ?? -1 } });
+                  }}
+                >
+                  {nodes.length === 0 && <option value={b.node}>No mixers in the rig</option>}
+                  {nodes.map((n, i) => (
+                    <option key={n.id} value={n.id}>
+                      Mixer {nodes.length > 1 ? i + 1 : ""} ({n.strips.length} inputs)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="insp-field">
+                <span>Input</span>
+                <select value={b.source} onChange={(e) => set({ binding: { ...b, source: Number(e.target.value) } })}>
+                  {!nodes.find((n) => n.id === b.node)?.strips.some((st) => st.source === b.source) && (
+                    <option value={b.source}>(not connected)</option>
+                  )}
+                  {nodes
+                    .find((n) => n.id === b.node)
+                    ?.strips.map((st) => (
+                      <option key={st.source} value={st.source}>
+                        {nodeName(studio.nodes, st.source)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {w.type !== "footswitch" && (
+                <label className="insp-field">
+                  <span>Control</span>
+                  <div className="segmented small">
+                    {(["gainDb", "pan"] as const).map((f) => (
+                      <button key={f} className={b.field === f ? "on" : ""} onClick={() => set({ binding: { ...b, field: f } })}>
+                        {f === "gainDb" ? "Volume" : "Pan"}
+                      </button>
+                    ))}
+                  </div>
+                </label>
+              )}
+            </>
           )}
 
           {b.kind === "meter" && (
@@ -234,7 +288,7 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
                 <option value="master">Main output</option>
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
-                    {nodeLabel(n)} output
+                    {nodeLabel(n, studio.nodes)} output
                   </option>
                 ))}
               </select>

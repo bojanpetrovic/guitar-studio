@@ -1,11 +1,12 @@
 import { memo } from "react";
 import { Handle, NodeProps, Position } from "@xyflow/react";
-import { AudioWaveform, Cable, ExternalLink, Power, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
+import { AudioWaveform, Blend, Cable, ExternalLink, Power, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useStudio } from "../App";
 import { formatLabel } from "../api";
 import type { StudioFlowNode } from "./GraphCanvas";
 import Fader, { formatDb } from "./Fader";
 import Meter from "./Meter";
+import MixerStrips from "./MixerStrips";
 
 function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
   const n = data.node;
@@ -16,6 +17,11 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
     input: { icon: <Cable size={16} />, title: "Guitar In", sub: studio.audio?.inputDevice ?? "No input" },
     output: { icon: <Speaker size={16} />, title: "Main Out", sub: studio.audio?.outputDevice ?? "No output" },
     gain: { icon: <SlidersHorizontal size={16} />, title: "Gain", sub: "Utility" },
+    mixer: {
+      icon: <Blend size={16} />,
+      title: "Mixer",
+      sub: `${n.strips.length} input${n.strips.length === 1 ? "" : "s"}`,
+    },
     plugin: {
       icon: <AudioWaveform size={16} />,
       title: n.plugin?.name ?? "Plugin",
@@ -24,7 +30,10 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
   }[n.kind];
 
   return (
-    <div className={`gs-node kind-${n.kind} ${n.bypass ? "bypassed" : ""} ${selected ? "selected" : ""}`}>
+    <div
+      className={`gs-node kind-${n.kind} ${n.bypass ? "bypassed" : ""} ${selected ? "selected" : ""}`}
+      style={n.kind === "mixer" ? { width: Math.max(240, 28 + n.strips.length * 74) } : undefined}
+    >
       {n.kind !== "input" && <Handle type="target" position={Position.Left} className="port in" />}
 
       <div className="node-head">
@@ -54,8 +63,10 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
           </>
         )}
 
-        {(n.kind === "gain" || n.kind === "output") && (
-          <Fader label={n.kind === "output" ? "Master" : "Level"} unit="dB" min={-60} max={n.kind === "output" ? 12 : 24}
+        {n.kind === "mixer" && <MixerStrips mixer={n.id} strips={n.strips} />}
+
+        {(n.kind === "gain" || n.kind === "output" || n.kind === "mixer") && (
+          <Fader label={n.kind === "output" ? "Master" : n.kind === "mixer" ? "Mix level" : "Level"} unit="dB" min={-60} max={n.kind === "output" ? 12 : 24}
             value={n.gainDb} format={formatDb} resetTo={0} onChange={(v) => actions.setParam(n.id, "gainDb", v)} />
         )}
 
@@ -78,7 +89,7 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
           </div>
         )}
 
-        {n.kind === "gain" && (
+        {(n.kind === "gain" || n.kind === "mixer") && (
           <div className="node-actions nodrag">
             <span className="spacer" />
             <button className="icon-btn danger" onClick={() => actions.remove(n.id)} title="Remove">

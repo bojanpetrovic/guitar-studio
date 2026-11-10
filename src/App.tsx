@@ -11,6 +11,7 @@ import {
   PRESET_EXISTS,
   PresetList,
   PresetLoad,
+  StripField,
   StudioView,
 } from "./api";
 import TitleBar from "./components/TitleBar";
@@ -27,6 +28,8 @@ type Pos = { x: number; y: number };
 export interface StudioActions {
   addPlugin: (p: PluginDescriptor, pos?: Pos) => Promise<void>;
   addGain: (pos?: Pos) => Promise<void>;
+  addMixer: (pos?: Pos) => Promise<void>;
+  setMixerStrip: (id: number, source: number, field: StripField, value: number) => void;
   remove: (id: number) => Promise<void>;
   connect: (from: number, to: number) => Promise<void>;
   disconnect: (from: number, to: number) => Promise<void>;
@@ -190,6 +193,33 @@ export default function App() {
         if (!res) return;
         const [id, view] = res;
         applyView(autoWire ? await appendToChain(id, view) : view);
+      },
+      addMixer: async (pos) => {
+        const autoWire = !pos;
+        const at = pos ?? chainPosition();
+        const res = await guard(() => api.addMixerNode(at.x, at.y));
+        if (!res) return;
+        const [id, view] = res;
+        applyView(autoWire ? await appendToChain(id, view) : view);
+      },
+      setMixerStrip: (id, source, field, value) => {
+        setStudio(
+          (s) =>
+            s && {
+              ...s,
+              nodes: s.nodes.map((n) =>
+                n.id === id
+                  ? {
+                      ...n,
+                      strips: n.strips.map((st) =>
+                        st.source === source ? { ...st, [field]: field === "mute" ? value >= 0.5 : value } : st,
+                      ),
+                    }
+                  : n,
+              ),
+            },
+        );
+        api.setMixerStrip(id, source, field, value).catch((e) => toast(String(e), "error"));
       },
       addGain: async (pos) => {
         const autoWire = !pos;

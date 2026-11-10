@@ -13,7 +13,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useStudio } from "../App";
-import { api, NodeView, ParamInfo } from "../api";
+import { api, nodeName, NodeView, ParamInfo } from "../api";
 import Inspector from "./Inspector";
 import { RuntimeContext, useParamRuntime } from "./runtime";
 import { WidgetView } from "./widgets";
@@ -244,6 +244,26 @@ export default function PedalboardView() {
       const sw = makeWidget("footswitch", x + (modeParam ? 150 : 80), 210);
       Object.assign(sw, { label: "ON / OFF", color: "#ff5d5d", binding: { kind: "bypass", node: p.id } });
       widgets.push(sw);
+      x += width + 30;
+    }
+    // One "MIXER" pedal per mixer node, with a volume fader for each input.
+    for (const m of studio.nodes.filter((n) => n.kind === "mixer" && n.strips.length > 0)) {
+      const strips = m.strips.slice(0, 6);
+      const width = Math.max(160, 30 + strips.length * 80);
+      const panel = makeWidget("panel", x, 30);
+      Object.assign(panel, { w: width, h: 350, color: ENCLOSURES[6], label: "MIXER" });
+      widgets.push(panel);
+      strips.forEach((st, k) => {
+        const f = makeWidget("fader", x + 20 + k * 80, 50);
+        Object.assign(f, {
+          w: 70,
+          h: 240,
+          label: nodeName(studio.nodes, st.source).slice(0, 10),
+          color: "#7aa2ff",
+          binding: { kind: "mix", node: m.id, source: st.source, field: "gainDb" },
+        });
+        widgets.push(f);
+      });
       x += width + 30;
     }
     const tuner = makeWidget("tuner", x + 10, 40);

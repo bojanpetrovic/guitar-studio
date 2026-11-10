@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AudioWaveform, Loader2, Piano, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { AudioWaveform, Blend, Loader2, Piano, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 import { useStudio } from "../App";
 import { formatLabel, PluginDescriptor, pluginKey } from "../api";
 
@@ -8,6 +8,7 @@ type KindFilter = "effects" | "instruments" | "all";
 
 export const DRAG_MIME = "application/x-gs-plugin";
 export const DRAG_GAIN = "gs:builtin:gain";
+export const DRAG_MIXER = "gs:builtin:mixer";
 
 function timeAgo(secs: number | null) {
   if (!secs) return "never";
@@ -86,6 +87,20 @@ export default function PluginBrowser() {
         <span className="plugin-text">
           <span className="plugin-name">Gain</span>
           <span className="plugin-vendor">Level / volume utility</span>
+        </span>
+      </button>
+      <button
+        className="plugin-item builtin"
+        draggable
+        onDragStart={(e) => onDragStart(e, DRAG_MIXER)}
+        onClick={() => actions.addMixer()}
+      >
+        <span className="plugin-icon">
+          <Blend size={16} />
+        </span>
+        <span className="plugin-text">
+          <span className="plugin-name">Mixer</span>
+          <span className="plugin-vendor">Volume, pan & mute per incoming cable</span>
         </span>
       </button>
 

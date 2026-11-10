@@ -31,6 +31,20 @@ exactly.
 - If a plugin in a preset isn't installed, the rest of the rig still loads, and a
   warning names the missing plugin.
 
+## Mixer
+
+The built-in **Mixer** node gives every cable coming into it its own channel strip:
+volume, pan and mute, with a post-fader meter. A **Mix level** fader sits after the
+mix. Use it to blend parallel paths, e.g. two amps, or a dry amp and a wet delay.
+
+- Pan is balance-style: a centered strip passes stereo sources at unity, and turning
+  one way fades the other side out.
+- Level and pan changes ramp over one block, so moving a fader never clicks.
+- Strip settings belong to the cable's source. Disconnecting and reconnecting keeps
+  them, and they're saved in presets.
+- Pedalboard knobs, faders and footswitches can drive any strip's volume, pan or
+  mute. "Build from rig" adds a fader pedal for each mixer.
+
 ## Pedalboard
 
 Every preset can have its own pedalboard: a control surface you lay out yourself and
@@ -40,8 +54,8 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
   labels, pedal enclosures and a tuner display. Drag to move, pull a corner to
   resize; everything snaps to the grid. ⌫ deletes, ⌘D duplicates, arrow keys nudge.
 - **Wiring:** select a control and choose what it drives in the inspector. Options are
-  any plugin parameter (searchable), a node's bypass or level, metronome on/off, tap
-  tempo, tempo, or the tuner. Meters can show any node's output or the main out.
+  any plugin parameter (searchable), a node's bypass or level, a mixer strip's
+  volume, pan or mute, metronome on/off, tap tempo, tempo, or the tuner. Meters can show any node's output or the main out.
 - **Build from rig** creates one pedal per plugin in signal order. Each gets an on/off
   footswitch, its two main knobs and an amp/channel selector where the plugin has
   one. The board also gets tap tempo, a tuner and an output meter.

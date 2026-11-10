@@ -152,6 +152,29 @@ fn add_gain_node(state: State<AppState>, x: f32, y: f32) -> CmdResult<(u32, Stud
 }
 
 #[tauri::command]
+fn add_mixer_node(state: State<AppState>, x: f32, y: f32) -> CmdResult<(u32, StudioView)> {
+    let mut studio = state.studio.lock();
+    let id = studio.add_mixer_node(x, y).map_err(err)?;
+    Ok((id, studio.view()))
+}
+
+/// `field`: "gainDb" | "pan" | "mute".
+#[tauri::command]
+fn set_mixer_strip(
+    state: State<AppState>,
+    id: u32,
+    source: u32,
+    field: String,
+    value: f32,
+) -> CmdResult<()> {
+    state
+        .studio
+        .lock()
+        .set_mixer_strip(id, source, &field, value)
+        .map_err(err)
+}
+
+#[tauri::command]
 fn remove_node(app: AppHandle, state: State<AppState>, id: u32) -> CmdResult<StudioView> {
     editor::close(&app, &state, id);
     let mut studio = state.studio.lock();
@@ -308,6 +331,8 @@ pub fn run() {
             scan_plugins,
             add_plugin_node,
             add_gain_node,
+            add_mixer_node,
+            set_mixer_strip,
             remove_node,
             connect,
             disconnect,

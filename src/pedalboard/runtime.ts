@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useStudio } from "../App";
-import { api, ParamInfo, StudioView } from "../api";
+import { api, nodeName as nameOf, ParamInfo, StudioView } from "../api";
 import { Board, Widget } from "./types";
 
 /** How long a value set from the board wins over polled values (covers the round trip). */
@@ -169,11 +169,7 @@ export function useResolved(w: Widget): Resolved {
   const { studio, actions } = useStudio();
   const rt = useRuntime();
   const b = w.binding;
-  const nodeName = (id: number) => {
-    const n = studio.nodes.find((x) => x.id === id);
-    if (!n) return undefined;
-    return n.plugin?.name ?? { input: "Guitar In", output: "Main Out", gain: "Gain", plugin: "Plugin" }[n.kind];
-  };
+  const nodeName = (id: number) => (studio.nodes.some((x) => x.id === id) ? nameOf(studio.nodes, id) : undefined);
 
   switch (b.kind) {
     case "none":
@@ -243,6 +239,55 @@ export function useResolved(w: Widget): Resolved {
         defaultNorm: clamp01((0 - lo) / (hi - lo)),
         display: n.gainDb <= -59.9 ? "-∞ dB" : `${n.gainDb > 0 ? "+" : ""}${n.gainDb.toFixed(1)} dB`,
         setNorm: (x) => actions.setParam(n.id, "gainDb", Math.round((lo + clamp01(x) * (hi - lo)) * 10) / 10),
+      };
+    }
+
+    case "mix": {
+      const mixer = studio.nodes.find((x) => x.id === b.node && x.kind === "mixer");
+      const strip = mixer?.strips.find((st) => st.source === b.source);
+      const label = `${nodeName(b.source) ?? "Missing input"} (${mixer ? "Mixer" : "missing mixer"})`;
+      if (!mixer || !strip) return { ...BASE, target: label };
+      const set = (field: "gainDb" | "pan" | "mute", v: number) => actions.setMixerStrip(mixer.id, b.source, field, v);
+      if (b.field === "mute") {
+        const on = !strip.mute;
+        return {
+          ...BASE,
+          ok: true,
+          target: `${label} · on/off`,
+          display: on ? "ON" : "MUTED",
+          on,
+          toggle: () => set("mute", on ? 1 : 0),
+          press: () => set("mute", 0),
+          release: () => set("mute", 1),
+        };
+      }
+      if (b.field === "pan") {
+        const lo = w.options.min ?? -1;
+        const hi = w.options.max ?? 1;
+        const p = strip.pan;
+        return {
+          ...BASE,
+          ok: true,
+          target: `${label} · pan`,
+          norm: clamp01((p - lo) / (hi - lo)),
+          defaultNorm: clamp01((0 - lo) / (hi - lo)),
+          display: Math.abs(p) < 0.02 ? "C" : `${p < 0 ? "L" : "R"}${Math.round(Math.abs(p) * 100)}`,
+          setNorm: (x) => {
+            const v = lo + clamp01(x) * (hi - lo);
+            set("pan", Math.abs(v) < 0.03 ? 0 : Math.round(v * 100) / 100);
+          },
+        };
+      }
+      const lo = w.options.min ?? -60;
+      const hi = w.options.max ?? 12;
+      return {
+        ...BASE,
+        ok: true,
+        target: `${label} · volume`,
+        norm: clamp01((strip.gainDb - lo) / (hi - lo)),
+        defaultNorm: clamp01((0 - lo) / (hi - lo)),
+        display: strip.gainDb <= -59.9 ? "-∞ dB" : `${strip.gainDb > 0 ? "+" : ""}${strip.gainDb.toFixed(1)} dB`,
+        setNorm: (x) => set("gainDb", Math.round((lo + clamp01(x) * (hi - lo)) * 10) / 10),
       };
     }
 

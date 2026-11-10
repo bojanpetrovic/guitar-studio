@@ -1,11 +1,11 @@
 //! Control-thread facade: the editable graph, plugin instances, audio lifecycle.
 
 use crate::audio::{self, AudioConfig, AudioShared, AudioStatus, RunningAudio, Telemetry};
-use crate::graph::{NodeId, Schedule, Step, topo_order};
+use crate::graph::{MixerChannel, NodeId, Schedule, Step, topo_order};
 use crate::metronome::{MetronomeSettings, MetronomeShared};
 use crate::nodes::{GainNode, InputNode, MAX_BLOCK, NodeShared, PluginNode, Processor};
 use crate::plugins::{self, ParamInfo, PluginDescriptor, PluginSlot, SharedPlugin};
-use crate::presets::{self, Patch, PatchNode};
+use crate::presets::{self, MixerStrip, Patch, PatchNode};
 use crate::tuner::{self, TunerReading, TunerShared, TunerThread};
 use crate::util::db_to_gain;
 use anyhow::{Result, anyhow, bail};
@@ -24,6 +24,8 @@ pub enum NodeType {
     Output,
     Gain,
     Plugin,
+    /// Mixes its inputs with per-input gain / pan / mute strips.
+    Mixer,
 }
 
 struct GraphNode {
@@ -33,6 +35,23 @@ struct GraphNode {
     gain_db: f32,
     shared: Arc<NodeShared>,
     plugin: Option<SharedPlugin>,
+    /// Mixer nodes: strip settings per source node. Kept when a cable is removed so
+    /// reconnecting restores the strip.
+    strips: BTreeMap<NodeId, Strip>,
+}
+
+struct Strip {
+    setting: MixerStrip,
+    shared: Arc<MixerChannel>,
+}
+
+impl Strip {
+    fn new(setting: MixerStrip) -> Self {
+        Self {
+            shared: MixerChannel::new(setting.gain_db, setting.pan, setting.mute),
+            setting,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +65,8 @@ pub struct NodeView {
     pub bypass: bool,
     pub channel: u32,
     pub plugin: Option<PluginDescriptor>,
+    /// Mixer nodes: strips for the connected inputs, in cable order.
+    pub strips: Vec<MixerStrip>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,8 +100,17 @@ pub struct NodeMeter {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StripMeter {
+    pub mixer: NodeId,
+    pub source: NodeId,
+    pub peak: [f32; 2],
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TelemetryView {
     pub nodes: Vec<NodeMeter>,
+    pub strips: Vec<StripMeter>,
     pub output_peak: [f32; 2],
     pub cpu_load: f32,
     pub underruns: u32,
@@ -238,8 +268,15 @@ impl Studio {
                 gain_db,
                 shared,
                 plugin,
+                strips: BTreeMap::new(),
             },
         );
+    }
+
+    pub fn add_mixer_node(&mut self, x: f32, y: f32) -> Result<NodeId> {
+        let id = self.insert_node(NodeType::Mixer, x, y, 0.0, None);
+        self.rebuild()?;
+        Ok(id)
     }
 
     pub fn add_gain_node(&mut self, x: f32, y: f32) -> Result<NodeId> {
@@ -269,6 +306,9 @@ impl Studio {
         }
         let node = self.nodes.remove(&id).expect("checked");
         self.edges.retain(|(a, b)| *a != id && *b != id);
+        for n in self.nodes.values_mut() {
+            n.strips.remove(&id);
+        }
         self.rebuild()?;
         Ok(node.plugin)
     }
@@ -291,6 +331,16 @@ impl Studio {
         if topo_order(&ids, &self.edges).is_none() {
             self.edges.pop();
             bail!("that connection would create a feedback loop");
+        }
+        if let Some(mixer) = self
+            .nodes
+            .get_mut(&to)
+            .filter(|n| n.kind == NodeType::Mixer)
+        {
+            mixer
+                .strips
+                .entry(from)
+                .or_insert_with(|| Strip::new(MixerStrip::unity(from)));
         }
         self.rebuild()
     }
@@ -356,7 +406,7 @@ impl Studio {
                 let node = &self.nodes[id];
                 let processor: Box<dyn Processor> = match node.kind {
                     NodeType::Input => Box::new(InputNode::new(node.shared.clone())),
-                    NodeType::Output | NodeType::Gain => {
+                    NodeType::Output | NodeType::Gain | NodeType::Mixer => {
                         Box::new(GainNode::new(node.shared.clone()))
                     }
                     NodeType::Plugin => Box::new(PluginNode::new(
@@ -364,22 +414,90 @@ impl Studio {
                         node.plugin.clone().expect("plugin node has a plugin"),
                     )),
                 };
-                let sources = self
+                let feeding: Vec<NodeId> = self
                     .edges
                     .iter()
                     .filter(|(_, to)| to == id)
-                    .map(|(from, _)| index[from])
+                    .map(|(from, _)| *from)
                     .collect();
-                Step {
-                    node: *id,
+                let sources = feeding.iter().map(|from| index[from]).collect();
+                let step = Step::new(
+                    *id,
                     processor,
-                    shared: node.shared.clone(),
+                    node.shared.clone(),
                     sources,
-                    is_output: node.kind == NodeType::Output,
+                    node.kind == NodeType::Output,
+                );
+                if node.kind == NodeType::Mixer {
+                    let channels = feeding
+                        .iter()
+                        .map(|from| match node.strips.get(from) {
+                            Some(strip) => strip.shared.clone(),
+                            None => MixerChannel::new(0.0, 0.0, false),
+                        })
+                        .collect();
+                    step.with_channels(channels)
+                } else {
+                    step
                 }
             })
             .collect();
         audio.send_schedule(Schedule::new(steps))
+    }
+
+    /// Set one field of a mixer strip: `"gainDb"` (-60..+12), `"pan"` (-1..1) or
+    /// `"mute"` (0 / 1). Takes effect on the next block, ramped.
+    pub fn set_mixer_strip(
+        &mut self,
+        mixer: NodeId,
+        source: NodeId,
+        field: &str,
+        value: f32,
+    ) -> Result<()> {
+        let node = self
+            .nodes
+            .get_mut(&mixer)
+            .filter(|n| n.kind == NodeType::Mixer)
+            .ok_or_else(|| anyhow!("node {mixer} is not a mixer"))?;
+        let strip = node
+            .strips
+            .entry(source)
+            .or_insert_with(|| Strip::new(MixerStrip::unity(source)));
+        match field {
+            "gainDb" => {
+                strip.setting.gain_db = value.clamp(-60.0, 12.0);
+                strip.shared.gain.store(db_to_gain(strip.setting.gain_db));
+            }
+            "pan" => {
+                strip.setting.pan = value.clamp(-1.0, 1.0);
+                strip.shared.pan.store(strip.setting.pan);
+            }
+            "mute" => {
+                strip.setting.mute = value >= 0.5;
+                strip
+                    .shared
+                    .mute
+                    .store(strip.setting.mute, Ordering::Relaxed);
+            }
+            other => bail!("unknown mixer field '{other}'"),
+        }
+        Ok(())
+    }
+
+    /// A mixer's strips for its connected inputs, in cable order.
+    fn connected_strips(&self, id: NodeId) -> Vec<MixerStrip> {
+        let Some(node) = self.nodes.get(&id).filter(|n| n.kind == NodeType::Mixer) else {
+            return Vec::new();
+        };
+        self.edges
+            .iter()
+            .filter(|(_, to)| *to == id)
+            .map(|(from, _)| {
+                node.strips
+                    .get(from)
+                    .map_or(MixerStrip::unity(*from), |s| s.setting)
+            })
+            .collect()
     }
 
     // ------------------------------------------------------------------ presets
@@ -427,6 +545,7 @@ impl Studio {
                     channel: n.shared.channel.load(Ordering::Relaxed),
                     plugin,
                     state,
+                    strips: self.connected_strips(*id),
                 }
             })
             .collect();
@@ -497,6 +616,13 @@ impl Studio {
         for &(from, to) in &patch.edges {
             let _ = self.connect(from, to);
         }
+        for n in patch.nodes.iter().filter(|n| n.kind == NodeType::Mixer) {
+            if let Some(node) = self.nodes.get_mut(&n.id) {
+                for st in &n.strips {
+                    node.strips.insert(st.source, Strip::new(*st));
+                }
+            }
+        }
         self.audio = audio;
 
         self.pedalboard = patch.pedalboard.clone().unwrap_or(serde_json::Value::Null);
@@ -529,6 +655,7 @@ impl Studio {
                     channel: 0,
                     plugin: None,
                     state: None,
+                    strips: vec![],
                 },
                 PatchNode {
                     id: 2,
@@ -540,6 +667,7 @@ impl Studio {
                     channel: 0,
                     plugin: None,
                     state: None,
+                    strips: vec![],
                 },
             ],
             edges: vec![(1, 2)],
@@ -632,6 +760,7 @@ impl Studio {
                     bypass: n.shared.bypass.load(Ordering::Relaxed),
                     channel: n.shared.channel.load(Ordering::Relaxed),
                     plugin: n.plugin.as_ref().map(|p| p.lock().descriptor.clone()),
+                    strips: self.connected_strips(*id),
                 })
                 .collect(),
             edges: self
@@ -662,6 +791,17 @@ impl Studio {
                 .map(|(id, n)| NodeMeter {
                     id: *id,
                     peak: [n.shared.peak[0].take(), n.shared.peak[1].take()],
+                })
+                .collect(),
+            strips: self
+                .nodes
+                .iter()
+                .flat_map(|(id, n)| {
+                    n.strips.iter().map(move |(source, st)| StripMeter {
+                        mixer: *id,
+                        source: *source,
+                        peak: [st.shared.peak[0].take(), st.shared.peak[1].take()],
+                    })
                 })
                 .collect(),
             output_peak: [t.output_peak[0].take(), t.output_peak[1].take()],
@@ -752,12 +892,70 @@ mod tests {
             channel: 0,
             plugin: None,
             state: None,
+            strips: vec![],
         });
         patch.edges = vec![(1, 9), (9, 2)];
         s.apply_patch(&patch, HashMap::new()).unwrap();
         let v = s.view();
         assert_eq!(v.nodes.len(), 2);
         assert!(v.edges.is_empty());
+    }
+
+    #[test]
+    fn mixer_strips_follow_cables_and_presets() {
+        // Input → A, Input → B, A → Mix, B → Mix, Mix → Output
+        let mut s = Studio::new();
+        let a = s.add_gain_node(0.0, 0.0).unwrap();
+        let b = s.add_gain_node(0.0, 0.0).unwrap();
+        let mix = s.add_mixer_node(0.0, 0.0).unwrap();
+        s.disconnect(1, 2).unwrap();
+        for (f, t) in [(1, a), (1, b), (a, mix), (b, mix), (mix, 2)] {
+            s.connect(f, t).unwrap();
+        }
+        let strips = |s: &Studio| {
+            s.view()
+                .nodes
+                .into_iter()
+                .find(|n| n.id == mix)
+                .unwrap()
+                .strips
+        };
+        assert_eq!(
+            strips(&s),
+            vec![MixerStrip::unity(a), MixerStrip::unity(b)],
+            "one unity strip per input"
+        );
+
+        s.set_mixer_strip(mix, a, "gainDb", -12.0).unwrap();
+        s.set_mixer_strip(mix, b, "pan", 0.6).unwrap();
+        s.set_mixer_strip(mix, b, "mute", 1.0).unwrap();
+        assert!(
+            s.set_mixer_strip(a, b, "pan", 0.0).is_err(),
+            "only mixers have strips"
+        );
+        assert!(s.set_mixer_strip(mix, a, "bogus", 0.0).is_err());
+
+        // Disconnecting hides the strip; reconnecting brings its settings back.
+        s.disconnect(a, mix).unwrap();
+        assert_eq!(strips(&s).len(), 1);
+        s.connect(a, mix).unwrap();
+        let st = strips(&s);
+        let sa = st.iter().find(|x| x.source == a).unwrap();
+        assert_eq!(sa.gain_db, -12.0);
+
+        // Presets keep the strips.
+        let (patch, _) = s.to_patch("Mix");
+        let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap();
+        let st = strips(&t);
+        let sb = st.iter().find(|x| x.source == b).unwrap();
+        assert_eq!((sb.pan, sb.mute), (0.6, true));
+        assert_eq!(st.iter().find(|x| x.source == a).unwrap().gain_db, -12.0);
+
+        // Removing a source drops its strip.
+        t.remove_node(b).unwrap();
+        assert!(strips(&t).iter().all(|x| x.source != b));
     }
 
     #[test]

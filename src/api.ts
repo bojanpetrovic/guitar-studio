@@ -4,7 +4,18 @@ import { useSyncExternalStore } from "react";
 
 // ---------------------------------------------------------------- types (mirror Rust)
 
-export type NodeType = "input" | "output" | "gain" | "plugin";
+export type NodeType = "input" | "output" | "gain" | "plugin" | "mixer";
+
+export interface MixerStrip {
+  /** Node feeding this strip. */
+  source: number;
+  gainDb: number;
+  /** -1 left … 0 center … +1 right */
+  pan: number;
+  mute: boolean;
+}
+
+export type StripField = "gainDb" | "pan" | "mute";
 
 export interface PluginDescriptor {
   name: string;
@@ -29,6 +40,8 @@ export interface NodeView {
   bypass: boolean;
   channel: number;
   plugin: PluginDescriptor | null;
+  /** Mixer nodes: one strip per connected input, in cable order. */
+  strips: MixerStrip[];
 }
 
 export interface AudioConfig {
@@ -97,6 +110,7 @@ export interface TunerReading {
 
 export interface Telemetry {
   nodes: { id: number; peak: [number, number] }[];
+  strips: { mixer: number; source: number; peak: [number, number] }[];
   outputPeak: [number, number];
   cpuLoad: number;
   underruns: number;
@@ -150,6 +164,9 @@ export const api = {
   addPluginNode: (key: string, x: number, y: number) =>
     invoke<[number, StudioView]>("add_plugin_node", { key, x, y }),
   addGainNode: (x: number, y: number) => invoke<[number, StudioView]>("add_gain_node", { x, y }),
+  addMixerNode: (x: number, y: number) => invoke<[number, StudioView]>("add_mixer_node", { x, y }),
+  setMixerStrip: (id: number, source: number, field: StripField, value: number) =>
+    invoke<void>("set_mixer_strip", { id, source, field, value }),
   removeNode: (id: number) => invoke<StudioView>("remove_node", { id }),
   connect: (from: number, to: number) => invoke<StudioView>("connect", { from, to }),
   disconnect: (from: number, to: number) => invoke<StudioView>("disconnect", { from, to }),
@@ -202,6 +219,14 @@ export function meterLevel(peak: number): number {
   if (peak <= 0.001) return 0;
   const db = 20 * Math.log10(peak);
   return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+
+/** Display name for a rig node. */
+export function nodeName(nodes: NodeView[], id: number): string {
+  const n = nodes.find((x) => x.id === id);
+  if (!n) return "Missing";
+  if (n.plugin) return n.plugin.name;
+  return { input: "Guitar In", output: "Main Out", gain: "Gain", mixer: "Mixer", plugin: "Plugin" }[n.kind];
 }
 
 export const formatLabel: Record<PluginDescriptor["format"], string> = {

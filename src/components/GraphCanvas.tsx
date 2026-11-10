@@ -17,7 +17,7 @@ import { useStudio } from "../App";
 import { api, NodeView } from "../api";
 import StudioNode from "./StudioNode";
 import SignalEdge from "./SignalEdge";
-import { DRAG_GAIN, DRAG_MIME } from "./PluginBrowser";
+import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER } from "./PluginBrowser";
 
 export type StudioFlowNode = Node<{ node: NodeView }, "studio">;
 
@@ -86,6 +86,10 @@ export default function GraphCanvas() {
         actions.addGain(pos);
         return;
       }
+      if (key === DRAG_MIXER) {
+        actions.addMixer(pos);
+        return;
+      }
       const plugin = catalog.plugins.find((p) => `${p.format}:${p.uniqueId}` === key);
       if (plugin) actions.addPlugin(plugin, pos);
     },
@@ -132,7 +136,7 @@ export default function GraphCanvas() {
           position="bottom-right"
           nodeColor={(n) => {
             const kind = (n.data as { node: NodeView }).node.kind;
-            return kind === "plugin" ? "#ff9f2e" : kind === "gain" ? "#7aa2ff" : "#3ddc97";
+            return kind === "plugin" ? "#ff9f2e" : kind === "gain" || kind === "mixer" ? "#7aa2ff" : "#3ddc97";
           }}
           maskColor="rgba(8,9,12,0.7)"
         />
