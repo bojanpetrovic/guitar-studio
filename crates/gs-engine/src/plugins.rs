@@ -386,13 +386,26 @@ fn read_params(plugin: &dyn Plugin<f32>) -> Vec<ParamInfo> {
 
 pub type SharedPlugin = Arc<Mutex<PluginSlot>>;
 
-/// Load and activate a plugin. On macOS call this on the **main thread** — AU v3
-/// instantiation and VST3 controllers expect it.
+/// Plugin start-ups run one at a time, whichever thread they're on: two instances of
+/// the same component starting at once on different threads can hang inside
+/// `AudioComponentInstanceNew` (seen with Archetype Cory Wong).
+static ONE_LOAD_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// Can this plugin be started off the main thread? AU v2 components can (checked with
+/// JUCE, iPlug2 and Apple units: they start, process and open their editors fine,
+/// without needing the main thread meanwhile). VST3 and CLAP require the main thread.
+pub fn loads_off_main_thread(desc: &PluginDescriptor) -> bool {
+    desc.format == "au"
+}
+
+/// Load and activate a plugin. Call it on the **main thread**, except for formats where
+/// [`loads_off_main_thread`] says otherwise.
 pub fn load_plugin(
     desc: &PluginDescriptor,
     sample_rate: f64,
     max_block: usize,
 ) -> Result<PluginSlot> {
+    let _turn = ONE_LOAD_AT_A_TIME.lock();
     let info = desc.to_info()?;
     let mut plugin: Box<dyn Plugin<f32>> = match desc.format.as_str() {
         "vst3" => Box::new(truce_rack::vst3::Vst3Scanner::new().load(&info)?),

@@ -44,8 +44,10 @@ exactly.
   reuses running instances of the same plugins: Mixer Demo ↔ Pedalboard Demo takes ~2 ms
   instead of ~2.2 s. Spare instances that the previous or next preset in the list
   needs are kept loaded. Missing ones are preloaded in the background a moment after a
-  switch; a *Preloading …* chip shows in the title bar, and the window may pause briefly
-  while a big plugin starts (audio keeps playing).
+  switch, one at a time, with a *Preloading …* chip in the title bar. AU plugins start
+  on a background thread, so the app stays responsive even while a slow one loads
+  (Archetype Cory Wong: ~12 s); VST3 / CLAP plugins have to start on the main thread,
+  so the window may pause while one of those preloads (audio keeps playing).
 - A reused delay or reverb carries its tail into the next preset (spillover).
 
 ## Mixer
@@ -193,6 +195,7 @@ make preset-test FORMAT=au PLUGIN=nolly # save and reload a rig with a real plug
 make param-test FORMAT=au PLUGIN=nolly  # set and read back a plugin's parameters through the engine
 make scene-test FORMAT=au PLUGIN=nolly  # switch scenes on a real plugin, save and reload them
 make preset-timing                      # where preset switching spends its time, per plugin
+cargo run --release -p gs-engine --example background_load -- au "Cory Wong"  # start a plugin off the main thread
 make params FORMAT=au PLUGIN=nolly      # list a plugin's parameters (ids for pedalboard bindings)
 make scan                               # rescan plugins into the app's cache
 make reset-settings                     # forget the saved audio device and plugin cache

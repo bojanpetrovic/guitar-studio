@@ -6,7 +6,9 @@
 //! - instances the new rig doesn't use stay loaded if the previous or next preset in the
 //!   list needs them (so stepping back and forth is instant);
 //! - plugins the previous / next preset needs that aren't running yet are preloaded in
-//!   the background, one at a time, once the switch has settled.
+//!   the background, one at a time, once the switch has settled. AU plugins load right
+//!   on the preload thread, so the UI stays responsive; VST3 / CLAP must use the main
+//!   thread.
 //!
 //! Spares are capped at what those two neighbours need, so memory stays bounded.
 
@@ -15,6 +17,7 @@ use gs_engine::nodes::MAX_BLOCK;
 use gs_engine::plugins::{self, PluginDescriptor, SharedPlugin};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -29,6 +32,9 @@ pub struct Warm {
     spares: Mutex<Vec<SharedPlugin>>,
     /// Bumped by every refresh; a preload run stops when it's no longer the latest.
     generation: AtomicU64,
+    /// Held while a plugin preloads off the main thread, with its key in `in_flight`.
+    loading: Mutex<()>,
+    in_flight: Mutex<Option<String>>,
 }
 
 impl Warm {
@@ -40,6 +46,16 @@ impl Warm {
     /// Instances a rig switch didn't use. They're trimmed on the next refresh.
     pub fn put_back(&self, mut spares: Vec<SharedPlugin>) {
         self.spares.lock().append(&mut spares);
+    }
+
+    /// About to switch to a rig with these plugins: if one of them is preloading right
+    /// now, stop preloading after it and wait for it — it's sooner than starting another.
+    pub fn wait_for(&self, plugins: &[PluginDescriptor]) {
+        let busy = self.in_flight.lock().clone();
+        if busy.is_some_and(|key| plugins.iter().any(|d| d.key() == key)) {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            drop(self.loading.lock());
+        }
     }
 
     /// Release every spare (e.g. the sample rate changed: they'd run at the old one).
@@ -152,13 +168,30 @@ pub fn refresh(app: &AppHandle) {
                 }
             }
 
-            // Preload, one plugin at a time (plugins start on the main thread).
+            // Preload, one plugin at a time. Whatever loads goes to the spares (the next
+            // refresh trims what isn't needed after all).
             for desc in missing {
                 if !latest() {
                     break;
                 }
                 let _ = app.emit("warming", Some(&desc.name));
-                std::thread::sleep(Duration::from_millis(80)); // let the UI show it first
+                if plugins::loads_off_main_thread(&desc) {
+                    // Right here, off the main thread: the UI stays responsive however
+                    // long it takes (Archetype Cory Wong: ~12 s).
+                    let rate = state.studio.lock().sample_rate();
+                    let _loading = state.warm.loading.lock();
+                    *state.warm.in_flight.lock() = Some(desc.key());
+                    let loaded = plugins::load_plugin(&desc, rate, MAX_BLOCK);
+                    *state.warm.in_flight.lock() = None;
+                    match loaded {
+                        Ok(slot) => state.warm.spares.lock().push(Arc::new(Mutex::new(slot))),
+                        Err(e) => log::warn!("preloading {} failed: {e:#}", desc.name),
+                    }
+                    std::thread::sleep(GAP);
+                    continue;
+                }
+                // VST3 / CLAP must start on the main thread (the window pauses meanwhile).
+                std::thread::sleep(Duration::from_millis(80)); // let the UI show the chip first
                 let (done, wait) = std::sync::mpsc::channel();
                 let main = app.clone();
                 let ran = app.run_on_main_thread(move || {
@@ -171,15 +204,7 @@ pub fn refresh(app: &AppHandle) {
                     };
                     let rate = state.studio.lock().sample_rate();
                     match plugins::load_plugin(&desc, rate, MAX_BLOCK) {
-                        Ok(slot) => {
-                            let p: SharedPlugin = std::sync::Arc::new(Mutex::new(slot));
-                            // A newer switch may already want something else.
-                            if state.warm.generation.load(Ordering::SeqCst) == generation {
-                                state.warm.spares.lock().push(p);
-                            } else {
-                                state.graveyard.lock().push(p);
-                            }
-                        }
+                        Ok(slot) => state.warm.spares.lock().push(Arc::new(Mutex::new(slot))),
                         Err(e) => log::warn!("preloading {} failed: {e:#}", desc.name),
                     }
                     let _ = done.send(());

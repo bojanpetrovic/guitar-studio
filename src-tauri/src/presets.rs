@@ -112,6 +112,13 @@ pub fn save_preset(
 pub fn load_preset(app: AppHandle, state: State<AppState>, name: String) -> CmdResult<PresetLoad> {
     let _busy = RigGuard::take()?;
     let patch = state.presets.load(&name).map_err(|e| format!("{e:#}"))?;
+    // Switching to the preset being preloaded? Take that instance when it's ready.
+    let needed: Vec<_> = patch
+        .nodes
+        .iter()
+        .filter_map(|n| n.plugin.clone())
+        .collect();
+    state.warm.wait_for(&needed);
     close_all_editors(&app, &state);
     // Offer the running instances and the warm spares for reuse (see warm.rs).
     let (sample_rate, mut spares) = {
