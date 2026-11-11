@@ -14,8 +14,8 @@ export const IS_PLUGIN = "__GS_PLUGIN__" in window;
 /** Running in a phone's browser, remote-controlling the desktop app. */
 export const IS_REMOTE = !IS_DESKTOP && !IS_PLUGIN;
 
-/** Commands that only read; anything else counts as an edit (see `lastEdit`). */
-const READS = /^(get_|list_|remote_)|^(plugin_params|preset_ready|open_editor)$/;
+/** Commands that don't change the rig; anything else counts as an edit (see `lastEdit`). */
+const READS = /^(get_|list_|remote_)|^(plugin_params|preset_ready|open_editor|set_window_buttons)$/;
 /** Commands the engine runs off its main thread (`gs_app::runs_off_main`). */
 const OFF_MAIN = /^(scan_plugins|preset_ready)$/;
 

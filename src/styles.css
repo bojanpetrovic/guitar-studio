@@ -2450,6 +2450,7 @@ select {
 .pedalboard.on-stage .pb-stage {
   overflow: visible;
 }
+/* No CSS shadow on stage: see the stage dock below. */
 .pedalboard.on-stage .pb-board {
   box-shadow: none;
 }
@@ -2511,14 +2512,15 @@ select {
   min-width: 0;
   overflow: hidden;
 }
-/* Same width as the board above it, so the two read as one unit. */
+/* Same width as the board above it, so the two read as one unit. No CSS shadow (like
+   the board's): the window is see-through on stage, and macOS outlines its own window
+   shadow around the faint edge of a CSS one, which shows as a stray line. */
 .app.stage-mode > .dock {
   justify-content: center;
   margin-top: 10px;
   border: 1px solid var(--line-2);
   border-radius: 14px;
   background: color-mix(in srgb, var(--panel-2) 94%, transparent);
-  box-shadow: var(--shadow);
 }
 .dock > * {
   flex: none;

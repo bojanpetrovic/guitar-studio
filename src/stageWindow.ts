@@ -2,10 +2,9 @@
 // (traffic lights hidden; the overlay title bar is already invisible), turns
 // see-through and takes the board's shape, so only the board is on screen.
 // Leaving stage mode puts the window back exactly where and how it was.
-import { invoke } from "@tauri-apps/api/core";
 import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { setWindowTransparent } from "./themes";
-import { IS_DESKTOP as IN_TAURI } from "./transport";
+import { call, IS_DESKTOP as IN_TAURI } from "./transport";
 
 /** Must match tauri.conf.json. */
 const NORMAL_MIN = new LogicalSize(1100, 680);
@@ -92,7 +91,7 @@ async function place(s: Saved) {
   await win().setSize(s.size);
   await win().setPosition(s.pos);
 }
-const setButtons = (visible: boolean) => invoke("set_window_buttons", { visible });
+const setButtons = (visible: boolean) => call("set_window_buttons", { visible });
 
 async function restoreFrame() {
   await setButtons(true);
