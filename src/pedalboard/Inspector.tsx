@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Search, Trash2, WandSparkles, Eraser, Keyboard, X } from "lucide-react";
+import { Copy, Search, Sparkles, Trash2, WandSparkles, Eraser, Keyboard, X } from "lucide-react";
 import { useStudio } from "../studio";
 import { nodeName, NodeView } from "../api";
 import { useResolved, useRuntime } from "./runtime";
+import Surface from "./Surface";
 import {
   ACCENTS,
   Binding,
@@ -11,11 +12,11 @@ import {
   Board,
   BOARD_H,
   BOARD_W,
-  BoardSurface,
   ENCLOSURES,
   KEYABLE,
   keyLabel,
   reservedKey,
+  SURFACES,
   Widget,
   WIDGET_META,
 } from "./types";
@@ -200,16 +201,30 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
         <p className="insp-note muted">
           {BOARD_W} × {BOARD_H} — every board has the same size, so presets look alike on stage and on the phone.
         </p>
-        <label className="insp-field">
+        <div className="insp-field">
           <span>Surface</span>
-          <div className="segmented small">
-            {(["slate", "carbon", "wood", "steel"] as BoardSurface[]).map((s) => (
-              <button key={s} className={board.surface === s ? "on" : ""} onClick={() => onBoardChange({ ...board, surface: s })}>
-                {s[0].toUpperCase() + s.slice(1)}
+          <div className="surface-picker">
+            {SURFACES.map((s) => (
+              <button
+                key={s.id}
+                className={`surface-swatch ${board.surface === s.id ? "on" : ""}`}
+                onClick={() => onBoardChange({ ...board, surface: s.id })}
+                title={"animated" in s ? `${s.label} (animated)` : s.label}
+              >
+                {/* A real board surface, scaled down: what you see is what you get. */}
+                <span className="swatch-art">
+                  <span className={`swatch-board surface-${s.id}`}>
+                    <Surface surface={s.id} />
+                  </span>
+                </span>
+                <span className="swatch-label">
+                  {s.label}
+                  {"animated" in s && <Sparkles size={10} />}
+                </span>
               </button>
             ))}
           </div>
-        </label>
+        </div>
         <label className="check-row">
           <input
             type="checkbox"

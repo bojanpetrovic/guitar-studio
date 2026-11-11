@@ -85,6 +85,13 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
 - **Build from rig** creates one pedal per plugin in signal order. Each gets an on/off
   footswitch, its two main knobs and an amp/channel selector where the plugin has
   one. The board also gets tap tempo, a tuner and an output meter.
+- **Surfaces:** with nothing selected, the inspector picks the board's background
+  from live previews. The static ones are Slate, Carbon, Steel, Tolex, Tweed, Velvet,
+  Blueprint and a range of woods (Wood, Walnut, Maple, Mahogany, Rosewood, Ebony, Oak
+  planks, Barnwood and Charred). Aurora, Lava, Synthwave and Cosmos are animated (✦), and
+  Plexus (linked drifting points), Bokeh (soft floating lights) and rising sparks in
+  five colours (Embers, Frost, Toxic, Ultraviolet and Sakura) are particle effects
+  drawn on a canvas. Animated surfaces hold still when macOS *Reduce motion* is on.
 - **Play mode:** controls change the sound right away, and knobs follow changes you
   make inside the plugin's own window.
 - **Keyboard keys:** select a footswitch, knob, fader or selector and use

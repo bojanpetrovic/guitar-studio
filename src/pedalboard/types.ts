@@ -52,7 +52,40 @@ export interface Widget {
   options: WidgetOptions;
 }
 
-export type BoardSurface = "slate" | "carbon" | "wood" | "steel";
+/** Board backgrounds (styled in styles.css as `.surface-<id>`). Animated ones draw on
+ *  a `.pb-surface` layer under the controls (`particles`: on a canvas, see Surface.tsx),
+ *  and stand still with Reduce Motion on. */
+export const SURFACES = [
+  { id: "slate", label: "Slate" },
+  { id: "carbon", label: "Carbon" },
+  { id: "wood", label: "Wood" },
+  { id: "walnut", label: "Walnut" },
+  { id: "maple", label: "Maple" },
+  { id: "mahogany", label: "Mahogany" },
+  { id: "rosewood", label: "Rosewood" },
+  { id: "ebony", label: "Ebony" },
+  { id: "planks", label: "Oak planks" },
+  { id: "barnwood", label: "Barnwood" },
+  { id: "charred", label: "Charred" },
+  { id: "steel", label: "Steel" },
+  { id: "tolex", label: "Tolex" },
+  { id: "tweed", label: "Tweed" },
+  { id: "velvet", label: "Velvet" },
+  { id: "blueprint", label: "Blueprint" },
+  { id: "aurora", label: "Aurora", animated: true },
+  { id: "lava", label: "Lava", animated: true },
+  { id: "synthwave", label: "Synthwave", animated: true },
+  { id: "cosmos", label: "Cosmos", animated: true },
+  { id: "plexus", label: "Plexus", animated: true, particles: "plexus" },
+  { id: "embers", label: "Embers", animated: true, particles: "embers" },
+  { id: "frost", label: "Frost", animated: true, particles: "frost" },
+  { id: "toxic", label: "Toxic", animated: true, particles: "toxic" },
+  { id: "ultraviolet", label: "Ultraviolet", animated: true, particles: "ultraviolet" },
+  { id: "sakura", label: "Sakura", animated: true, particles: "sakura" },
+  { id: "bokeh", label: "Bokeh", animated: true, particles: "bokeh" },
+] as const;
+
+export type BoardSurface = (typeof SURFACES)[number]["id"];
 
 export interface Board {
   version: 1;

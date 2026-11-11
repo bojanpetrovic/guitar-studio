@@ -20,6 +20,7 @@ import { isTyping } from "../util";
 import { useLink } from "../transport";
 import { api, nodeName, NodeView, ParamInfo } from "../api";
 import Inspector from "./Inspector";
+import Surface from "./Surface";
 import { RuntimeContext, useParamRuntime } from "./runtime";
 import { clearKeySelection, WidgetView } from "./widgets";
 import { enterStage, exitStage } from "../stageWindow";
@@ -436,6 +437,8 @@ export default function PedalboardView() {
                 style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
                 data-tauri-drag-region={stage || undefined}
               >
+                {/* Animated surfaces draw here, under the controls. */}
+                <Surface surface={board.surface} />
                 {drawOrder(board.widgets).map((w) => (
                   <div
                     key={w.id}
