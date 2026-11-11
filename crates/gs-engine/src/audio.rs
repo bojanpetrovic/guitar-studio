@@ -410,12 +410,10 @@ impl Rt {
         }
         if have < want {
             buf[have..].fill(0.0);
-            if have == 0 || have < want {
-                self.shared
-                    .telemetry
-                    .underruns
-                    .fetch_add(1, Ordering::Relaxed);
-            }
+            self.shared
+                .telemetry
+                .underruns
+                .fetch_add(1, Ordering::Relaxed);
         }
         for c in 0..ch {
             let dst = &mut self.hw_in[c][..n];
@@ -480,8 +478,16 @@ impl Rt {
         let [l, r] = &self.master;
         for f in 0..n {
             let frame = &mut out[f * ch..(f + 1) * ch];
-            // Soft safety clip so a runaway plugin can't blast the speakers.
-            let (sl, sr) = (l[f].clamp(-1.0, 1.0), r[f].clamp(-1.0, 1.0));
+            // Hard safety clip so a runaway plugin can't blast the speakers (NaN, which
+            // `clamp` lets through, becomes silence).
+            let safe = |s: f32| {
+                if s.is_finite() {
+                    s.clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            };
+            let (sl, sr) = (safe(l[f]), safe(r[f]));
             match ch {
                 1 => frame[0] = 0.5 * (sl + sr),
                 _ => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Palette } from "lucide-react";
+import { useDismiss } from "../hooks";
 import { cycleTheme, setThemeChoice, Theme, THEMES, useTheme } from "../themes";
 
 function Preview({ s }: { s: Theme["swatch"] }) {
@@ -40,17 +41,7 @@ export default function ThemeMenu() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => root.current && !root.current.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(root, open, () => setOpen(false));
 
   const system = choice === "system";
 

@@ -1,20 +1,19 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import {
   api,
   Catalog,
   nextFrame,
-  PluginDescriptor,
-  MetronomeSettings,
   pluginKey,
   PRESET_EXISTS,
   PresetList,
   PresetLoad,
-  StripField,
   StudioView,
   SyncState,
 } from "./api";
 import { IS_REMOTE, lastEdit, on } from "./transport";
+import { ActionsContext, AudioContext, CatalogContext, Ctx, Pos, StudioActions, StudioContext, View } from "./studio";
+import { clampBpm } from "./util";
 import TitleBar from "./components/TitleBar";
 import PluginBrowser from "./components/PluginBrowser";
 import GraphCanvas from "./components/GraphCanvas";
@@ -27,70 +26,6 @@ import RemoteShell, { RemoteBoot } from "./remote/RemoteShell";
 import ReplaceDialog from "./components/ReplaceDialog";
 import { parseBoard } from "./pedalboard/types";
 
-type Pos = { x: number; y: number };
-
-export interface StudioActions {
-  addPlugin: (p: PluginDescriptor, pos?: Pos) => Promise<void>;
-  addGain: (pos?: Pos) => Promise<void>;
-  addMixer: (pos?: Pos) => Promise<void>;
-  setMixerStrip: (id: number, source: number, field: StripField, value: number) => void;
-  remove: (id: number) => Promise<void>;
-  /** Open the "Replace with…" picker for a plugin node. */
-  pickReplacement: (id: number) => void;
-  /** Swap the plugin in node `id` for `p`, keeping its cables, place and board controls. */
-  replacePlugin: (id: number, p: PluginDescriptor) => Promise<void>;
-  connect: (from: number, to: number) => Promise<void>;
-  disconnect: (from: number, to: number) => Promise<void>;
-  setParam: (id: number, param: "gainDb" | "channel", value: number) => void;
-  setBypass: (id: number, bypass: boolean) => Promise<void>;
-  openEditor: (id: number) => Promise<void>;
-  scan: () => Promise<void>;
-  apply: (v: StudioView) => void;
-  openSettings: () => void;
-  toast: (message: string, kind?: Toast["kind"]) => number;
-  loadPreset: (name: string) => Promise<void>;
-  /** Resolves to "exists" when the name belongs to another preset and overwrite is false. */
-  savePreset: (name: string, overwrite?: boolean) => Promise<"ok" | "exists" | "error">;
-  newPreset: () => Promise<void>;
-  deletePreset: (name: string) => Promise<void>;
-  renamePreset: (from: string, to: string) => Promise<boolean>;
-  setMetronome: (patch: Partial<MetronomeSettings>) => void;
-  tapTempo: () => void;
-  setTuner: (enabled: boolean, referenceA4?: number) => void;
-  /** Replace the pedalboard layout (kept locally and mirrored to the engine). */
-  updateBoard: (board: unknown) => void;
-  setView: (view: View) => void;
-  /** The pedalboard is being played full-window (frameless); hide the studio chrome. */
-  setStage: (on: boolean) => void;
-  /** Scenes: snapshots of every plugin's settings. Adding copies the current sound. */
-  addScene: () => Promise<void>;
-  selectScene: (index: number) => Promise<void>;
-  renameScene: (index: number, name: string) => Promise<boolean>;
-  deleteScene: (index: number) => Promise<void>;
-}
-
-export type View = "rig" | "board";
-
-interface Ctx {
-  studio: StudioView;
-  catalog: Catalog;
-  presets: PresetList;
-  /** Bumps whenever a whole rig is swapped in, so the canvas can re-fit. */
-  layoutKey: number;
-  view: View;
-  stage: boolean;
-  /** This UI is a phone remote-controlling the desktop app (play only). */
-  remote: boolean;
-  actions: StudioActions;
-}
-
-const StudioContext = createContext<Ctx | null>(null);
-export const useStudio = () => {
-  const ctx = useContext(StudioContext);
-  if (!ctx) throw new Error("StudioContext missing");
-  return ctx;
-};
-
 export default function App() {
   const [studio, setStudio] = useState<StudioView | null>(null);
   const [catalog, setCatalog] = useState<Catalog>({ plugins: [], errors: [], scannedAt: null, scanning: false });
@@ -101,6 +36,7 @@ export default function App() {
   const [layoutKey, setLayoutKey] = useState(0);
   const [view, setView] = useState<View>("rig");
   const [stage, setStage] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
   const taps = useRef<number[]>([]);
   const toastId = useRef(1);
   const studioRef = useRef<StudioView | null>(null);
@@ -151,21 +87,54 @@ export default function App() {
     [toast],
   );
 
+  // Preset loads run one at a time; asking again while one runs queues only the latest
+  // (holding → or tapping it quickly doesn't stack up full rig swaps).
+  const presetQueue = useRef<{ busy: boolean; next: string | null; loaded: string | null }>({
+    busy: false,
+    next: null,
+    loaded: null,
+  });
   const loadPresetNow = useCallback(
     async (name: string) => {
-      // Instant when every plugin it needs is already running or kept warm.
-      const ready = await api.presetReady(name).catch(() => false);
-      const loading = ready ? null : toast(`Loading “${name}”…`, "loading");
-      if (!ready) await nextFrame(); // let the toast paint: plugins load on the main thread
-      try {
-        applyLoad(await api.loadPreset(name));
-      } catch (e) {
-        toast(String(e), "error");
-      } finally {
-        if (loading !== null) dismiss(loading);
+      const q = presetQueue.current;
+      q.next = name;
+      if (q.busy) return;
+      q.busy = true;
+      while (q.next) {
+        const target = q.next;
+        q.next = null;
+        if (target === q.loaded && target === presetsRef.current.current) continue;
+        // Instant when every plugin it needs is already running or kept warm.
+        const ready = await api.presetReady(target).catch(() => false);
+        const loading = ready ? null : toast(`Loading “${target}”…`, "loading");
+        if (!ready) await nextFrame(); // let the toast paint: plugins load on the main thread
+        try {
+          applyLoad(await api.loadPreset(target));
+          q.loaded = target;
+        } catch (e) {
+          toast(String(e), "error");
+        } finally {
+          if (loading !== null) dismiss(loading);
+        }
       }
+      q.busy = false;
     },
     [toast, dismiss, applyLoad],
+  );
+  /** Previous / next preset, counting from the one being loaded (so quick presses add up). */
+  const stepPreset = useCallback(
+    (dir: 1 | -1) => {
+      const { presets: list, current } = presetsRef.current;
+      const q = presetQueue.current;
+      const names = list.map((p) => p.name);
+      if (names.length === 0) return;
+      const from = q.next ?? (q.busy ? q.loaded : null) ?? current;
+      const at = from ? names.indexOf(from) : -1;
+      if (names.length < 2 && at >= 0) return;
+      const target = names[(at + dir + names.length) % names.length];
+      if (target !== from) loadPresetNow(target);
+    },
+    [loadPresetNow],
   );
 
   // html/body must go see-through too while the board is on stage.
@@ -217,7 +186,10 @@ export default function App() {
     };
   }, [applySync]);
 
+  const launched = useRef(false);
   useEffect(() => {
+    if (launched.current) return; // StrictMode runs effects twice in dev
+    launched.current = true;
     if (IS_REMOTE) {
       Promise.all([api.remoteSync(), api.listPresets()]).then(([sync, p]) => {
         rig.current = sync.rig;
@@ -236,19 +208,34 @@ export default function App() {
       setPresets(p);
       const blank = s.nodes.length <= 2;
       if (blank && !p.current && p.last && p.presets.some((x) => x.name === p.last)) loadPresetNow(p.last);
-    });
-    api.getCatalog().then(setCatalog);
-    return on<Catalog>("catalog", setCatalog);
+    }, (e) => setBootError(String(e)));
+    api.getCatalog().then(setCatalog, () => {});
+    on<Catalog>("catalog", setCatalog);
   }, []);
 
   /** Wire a freshly added node into the main chain, just before the Output. */
-  const appendToChain = useCallback(async (id: number, view: StudioView) => {
-    const out = view.nodes.find((n) => n.kind === "output");
-    const feed = out && view.edges.find((e) => e.to === out.id && e.from !== id);
-    if (!out || !feed) return view;
-    await api.disconnect(feed.from, out.id);
-    await api.connect(feed.from, id);
-    return api.connect(id, out.id);
+  const appendToChain = useCallback(
+    async (id: number, view: StudioView) => {
+      const out = view.nodes.find((n) => n.kind === "output");
+      const feed = out && view.edges.find((e) => e.to === out.id && e.from !== id);
+      if (!out || !feed) return view;
+      try {
+        await api.disconnect(feed.from, out.id);
+        await api.connect(feed.from, id);
+        return await api.connect(id, out.id);
+      } catch (e) {
+        // Show the node anyway, with whatever cables the engine ended up with.
+        toast(String(e), "error");
+        return api.getStudio().catch(() => view);
+      }
+    },
+    [toast],
+  );
+
+  /** Move a node (the canvas has already drawn it there). */
+  const moveNode = useCallback((id: number, x: number, y: number) => {
+    setStudio((s) => s && { ...s, nodes: s.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)) });
+    api.moveNode(id, x, y).catch(() => {});
   }, []);
 
   /** Place a new chain node between the last chain node and the Output, shifting Output right. */
@@ -259,9 +246,9 @@ export default function App() {
     const prev = feed && v?.nodes.find((n) => n.id === feed.from);
     if (!out || !prev) return { x: 400, y: 240 };
     const x = prev.x + 300;
-    if (out.x < x + 300) api.moveNode(out.id, x + 300, out.y).catch(() => {});
+    if (out.x < x + 300) moveNode(out.id, x + 300, out.y);
     return { x, y: prev.y };
-  }, []);
+  }, [moveNode]);
 
   const actions: StudioActions = useMemo(
     () => ({
@@ -367,14 +354,20 @@ export default function App() {
         api.setNodeParam(id, param, value).catch((e) => toast(String(e), "error"));
       },
       setBypass: async (id, bypass) => {
-        await guard(() => api.setBypass(id, bypass));
-        setStudio((s) => s && { ...s, nodes: s.nodes.map((n) => (n.id === id ? { ...n, bypass } : n)) });
+        try {
+          await api.setBypass(id, bypass);
+          setStudio((s) => s && { ...s, nodes: s.nodes.map((n) => (n.id === id ? { ...n, bypass } : n)) });
+        } catch (e) {
+          toast(String(e), "error");
+        }
       },
+      moveNode,
       openEditor: async (id) => {
         await nextFrame();
         await guard(() => api.openEditor(id));
       },
       loadPreset: loadPresetNow,
+      stepPreset,
       savePreset: async (name, overwrite = false) => {
         try {
           const [list, warnings] = await api.savePreset(name, overwrite);
@@ -408,7 +401,7 @@ export default function App() {
         const cur = studioRef.current;
         if (!cur) return;
         const next = { ...cur.metronome, ...patch };
-        next.bpm = Math.round(Math.max(30, Math.min(300, next.bpm)));
+        next.bpm = clampBpm(next.bpm);
         setStudio((s) => s && { ...s, metronome: next });
         api.setMetronome(next).catch((e) => toast(String(e), "error"));
       },
@@ -420,7 +413,7 @@ export default function App() {
         const bpm = 60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length);
         const cur = studioRef.current;
         if (!cur) return;
-        const next = { ...cur.metronome, bpm: Math.round(Math.max(30, Math.min(300, bpm))) };
+        const next = { ...cur.metronome, bpm: clampBpm(bpm) };
         setStudio((s) => s && { ...s, metronome: next });
         api.setMetronome(next).catch(() => {});
       },
@@ -459,36 +452,65 @@ export default function App() {
         }
       },
     }),
-    [toast, guard, dismiss, appendToChain, chainPosition, loadPresetNow, applyLoad, applyView],
+    [toast, guard, dismiss, appendToChain, chainPosition, moveNode, loadPresetNow, stepPreset, applyLoad, applyView],
   );
 
-  if (!studio) return IS_REMOTE ? <RemoteBoot /> : <div className="boot">Starting audio engine…</div>;
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeReplace = useCallback(() => setReplacing(null), []);
+  const ctx: Ctx | null = useMemo(
+    () =>
+      studio && {
+        studio,
+        catalog,
+        presets,
+        layoutKey,
+        view: IS_REMOTE ? "board" : view,
+        stage: !IS_REMOTE && stage,
+        remote: IS_REMOTE,
+        actions,
+      },
+    [studio, catalog, presets, layoutKey, view, stage, actions],
+  );
 
-  if (IS_REMOTE)
-    return (
-      <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view: "board", stage: false, remote: true, actions }}>
-        <RemoteShell />
-        <Toasts toasts={toasts} onDismiss={dismiss} />
-      </StudioContext.Provider>
-    );
+  if (!studio || !ctx) {
+    if (IS_REMOTE) return <RemoteBoot />;
+    return <div className="boot">{bootError ? `The audio engine didn't start: ${bootError}` : "Starting audio engine…"}</div>;
+  }
 
   return (
-    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, stage, remote: false, actions }}>
-      <ReactFlowProvider>
-        <div className={`app view-${view} ${stage ? "stage-mode" : ""}`}>
-          <TitleBar />
-          <aside className="sidebar left">
-            <PluginBrowser />
-          </aside>
-          <main className="stage">{view === "rig" ? <GraphCanvas /> : <PedalboardView />}</main>
-          <Dock />
-        </div>
-        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
-        {replacing !== null && studio.nodes.some((n) => n.id === replacing && n.plugin) && (
-          <ReplaceDialog node={studio.nodes.find((n) => n.id === replacing)!} onClose={() => setReplacing(null)} />
-        )}
-        <Toasts toasts={toasts} onDismiss={dismiss} />
-      </ReactFlowProvider>
+    <StudioContext.Provider value={ctx}>
+      <ActionsContext.Provider value={actions}>
+        <CatalogContext.Provider value={catalog}>
+          <AudioContext.Provider value={studio.audio}>
+            {IS_REMOTE ? (
+              <RemoteShell />
+            ) : (
+              <ReactFlowProvider>
+                <Desktop view={view} stage={stage} />
+              </ReactFlowProvider>
+            )}
+            {settingsOpen && <SettingsDialog onClose={closeSettings} />}
+            {replacing !== null && studio.nodes.some((n) => n.id === replacing && n.plugin) && (
+              <ReplaceDialog node={studio.nodes.find((n) => n.id === replacing)!} onClose={closeReplace} />
+            )}
+            <Toasts toasts={toasts} onDismiss={dismiss} />
+          </AudioContext.Provider>
+        </CatalogContext.Provider>
+      </ActionsContext.Provider>
     </StudioContext.Provider>
+  );
+}
+
+/** The desktop window: title bar, plugin list, rig or pedalboard, and the dock. */
+function Desktop({ view, stage }: { view: View; stage: boolean }) {
+  return (
+    <div className={`app view-${view} ${stage ? "stage-mode" : ""}`}>
+      <TitleBar />
+      <aside className="sidebar left">
+        <PluginBrowser />
+      </aside>
+      <main className="stage">{view === "rig" ? <GraphCanvas /> : <PedalboardView />}</main>
+      <Dock />
+    </div>
   );
 }

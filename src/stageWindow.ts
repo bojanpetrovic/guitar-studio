@@ -5,8 +5,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { setWindowTransparent } from "./themes";
+import { IS_DESKTOP as IN_TAURI } from "./transport";
 
-const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 /** Must match tauri.conf.json. */
 const NORMAL_MIN = new LogicalSize(1100, 680);
 const STAGE_MIN = new LogicalSize(360, 180);

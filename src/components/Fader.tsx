@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 interface Props {
   label: string;
   value: number;
@@ -13,22 +11,18 @@ interface Props {
   resetTo?: number;
 }
 
-/** Horizontal slider with a filled track and a live readout. */
+/** Horizontal slider with a filled track and a live readout. Fully controlled: the
+ *  parent updates `value` optimistically. */
 export default function Fader({ label, value, min, max, step = 0.5, unit = "", format, onChange, resetTo }: Props) {
-  const [local, setLocal] = useState(value);
-  useEffect(() => setLocal(value), [value]);
-  const pct = ((local - min) / (max - min)) * 100;
-  const set = (v: number) => {
-    setLocal(v);
-    onChange(v);
-  };
+  const pct = ((value - min) / (max - min)) * 100;
+  const set = onChange;
 
   return (
     <label className="fader nodrag" onDoubleClick={() => resetTo !== undefined && set(resetTo)}>
       <span className="fader-head">
         <span className="fader-label">{label}</span>
         <span className="fader-value mono">
-          {format ? format(local) : local.toFixed(1)}
+          {format ? format(value) : value.toFixed(1)}
           {unit && <small>{unit}</small>}
         </span>
       </span>
@@ -37,12 +31,10 @@ export default function Fader({ label, value, min, max, step = 0.5, unit = "", f
         min={min}
         max={max}
         step={step}
-        value={local}
+        value={value}
         style={{ "--pct": `${pct}%` } as React.CSSProperties}
         onChange={(e) => set(Number(e.target.value))}
       />
     </label>
   );
 }
-
-export const formatDb = (v: number) => (v <= -59.9 ? "-∞" : `${v > 0 ? "+" : ""}${v.toFixed(1)}`);

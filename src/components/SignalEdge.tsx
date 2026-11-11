@@ -1,11 +1,11 @@
 import { BaseEdge, EdgeLabelRenderer, EdgeProps, getBezierPath } from "@xyflow/react";
 import { X } from "lucide-react";
-import { useStudio } from "../App";
+import { useActions } from "../studio";
 
 /** A patch cable: soft glow underneath, animated signal-flow dashes on top. */
 export default function SignalEdge(props: EdgeProps) {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, source, target } = props;
-  const { actions } = useStudio();
+  const actions = useActions();
   const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
 
   return (

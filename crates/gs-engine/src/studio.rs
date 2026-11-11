@@ -36,6 +36,8 @@ struct GraphNode {
     gain_db: f32,
     shared: Arc<NodeShared>,
     plugin: Option<SharedPlugin>,
+    /// The plugin's descriptor, copied out so views don't lock a live plugin.
+    descriptor: Option<PluginDescriptor>,
     /// Mixer nodes: strip settings per source node. Kept when a cable is removed so
     /// reconnecting restores the strip.
     strips: BTreeMap<NodeId, Strip>,
@@ -183,10 +185,6 @@ impl Studio {
 
     // ------------------------------------------------------------------ audio
 
-    pub fn audio_config(&self) -> &AudioConfig {
-        &self.audio_config
-    }
-
     pub fn sample_rate(&self) -> f64 {
         self.sample_rate
     }
@@ -230,11 +228,6 @@ impl Studio {
         }
     }
 
-    pub fn stop_audio(&mut self) {
-        self.audio = None;
-        self._tuner_thread = None;
-    }
-
     /// Free retired schedules. Call periodically from a non-RT thread.
     pub fn collect_garbage(&mut self) {
         if let Some(a) = &mut self.audio {
@@ -268,6 +261,7 @@ impl Studio {
     ) {
         self.next_id = self.next_id.max(id + 1);
         let shared = NodeShared::new(db_to_gain(gain_db));
+        let descriptor = plugin.as_ref().map(|p| p.lock().descriptor.clone());
         self.nodes.insert(
             id,
             GraphNode {
@@ -277,6 +271,7 @@ impl Studio {
                 gain_db,
                 shared,
                 plugin,
+                descriptor,
                 strips: BTreeMap::new(),
             },
         );
@@ -317,9 +312,12 @@ impl Studio {
             .nodes
             .get_mut(&id)
             .ok_or_else(|| anyhow!("no node {id}"))?;
-        let Some(old) = node.plugin.replace(plugin) else {
+        // Check first: `replace` on a Gain or Mixer node would put the plugin in it.
+        if node.plugin.is_none() {
             bail!("only plugins can be replaced");
-        };
+        }
+        node.descriptor = Some(plugin.lock().descriptor.clone());
+        let old = node.plugin.replace(plugin).expect("checked above");
         for scene in &mut self.scenes {
             scene.params.remove(&id);
         }
@@ -458,7 +456,6 @@ impl Studio {
                     .collect();
                 let sources = feeding.iter().map(|from| index[from]).collect();
                 let step = Step::new(
-                    *id,
                     processor,
                     node.shared.clone(),
                     sources,
@@ -631,7 +628,9 @@ impl Studio {
             .filter(|p| !slots.values().any(|s| Arc::ptr_eq(s, p)))
             .collect();
         self.edges.clear();
-        self.next_id = 1;
+        // Past every id in the patch, also those skipped below (a missing plugin), so a
+        // node added later can't inherit their scene data.
+        self.next_id = patch.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
 
         let (mut have_input, mut have_output) = (false, false);
         for n in &patch.nodes {
@@ -678,6 +677,15 @@ impl Studio {
         self.pedalboard = patch.pedalboard.clone().unwrap_or(serde_json::Value::Null);
         // Plugin states already hold the active scene's sound; nothing to apply.
         self.scenes = patch.scenes.iter().take(MAX_SCENES).cloned().collect();
+        for skipped in patch
+            .nodes
+            .iter()
+            .filter(|n| !self.nodes.contains_key(&n.id))
+        {
+            for scene in &mut self.scenes {
+                scene.forget_node(skipped.id);
+            }
+        }
         self.active_scene = patch.active_scene.filter(|&i| i < self.scenes.len());
         if let Some(m) = &patch.metronome {
             self.metronome.apply(&MetronomeSettings {
@@ -776,8 +784,10 @@ impl Studio {
             let Some(plugin) = self.plugin(node) else {
                 continue;
             };
-            let mut slot = plugin.lock();
+            // One parameter per lock, like scenes: a read can take ~70 µs on a JUCE AU,
+            // and the audio thread only waits so long before playing a block dry.
             for i in idxs {
+                let mut slot = plugin.lock();
                 out[i] = slot.param_index(items[i].1).and_then(|pi| {
                     let index = slot.params[pi].index;
                     slot.param_value_now(index)
@@ -941,6 +951,7 @@ impl Studio {
     }
 
     pub fn set_tuner(&mut self, enabled: bool, reference_a4: Option<f32>) {
+        // Two flags: the audio thread's tap, and the tuner thread (which resets itself).
         self.tuner_enabled.store(enabled, Ordering::Relaxed);
         self.tuner.enabled.store(enabled, Ordering::Relaxed);
         if let Some(a4) = reference_a4 {
@@ -963,7 +974,7 @@ impl Studio {
                     gain_db: n.gain_db,
                     bypass: n.shared.bypass.load(Ordering::Relaxed),
                     channel: n.shared.channel.load(Ordering::Relaxed),
-                    plugin: n.plugin.as_ref().map(|p| p.lock().descriptor.clone()),
+                    plugin: n.descriptor.clone(),
                     strips: self.connected_strips(*id),
                 })
                 .collect(),
@@ -1141,6 +1152,34 @@ mod tests {
         assert_eq!(t.view().active_scene, s.view().active_scene);
         t.reset_graph().unwrap();
         assert!(t.view().scenes.is_empty());
+    }
+
+    #[test]
+    fn missing_plugins_dont_hand_their_ids_or_scene_data_to_new_nodes() {
+        // A saved rig with a plugin (id 9) that isn't installed here, and a scene that
+        // remembers its settings.
+        let mut s = Studio::new();
+        s.add_scene(Some("Lead")).unwrap();
+        let (mut patch, _) = s.to_patch("Missing");
+        let input = patch.nodes[0].clone();
+        patch.nodes.push(PatchNode {
+            id: 9,
+            kind: NodeType::Plugin,
+            plugin: None,
+            ..input
+        });
+        patch.scenes[0].params.insert(9, BTreeMap::from([(1, 0.5)]));
+        patch.scenes[0].bypass.insert(9, true);
+
+        let mut t = Studio::new();
+        t.apply_patch(&patch, HashMap::new()).unwrap(); // no slot for 9: skipped
+        let (saved, _) = t.to_patch("Missing");
+        assert!(!saved.scenes[0].params.contains_key(&9));
+        assert!(!saved.scenes[0].bypass.contains_key(&9));
+        assert!(
+            t.add_gain_node(0.0, 0.0).unwrap() > 9,
+            "a new node gets a fresh id"
+        );
     }
 
     #[test]

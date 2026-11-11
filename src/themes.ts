@@ -2,6 +2,7 @@
 // this module picks one, remembers it, and keeps the native window in step.
 import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { IS_DESKTOP } from "./transport";
 
 export type ThemeId = "amber" | "midnight" | "neon" | "graphite" | "daylight" | "paper";
 export type ThemeChoice = ThemeId | "system";
@@ -79,7 +80,7 @@ function readChoice(): ThemeChoice {
   return DEFAULT;
 }
 
-export function resolveTheme(choice: ThemeChoice): Theme {
+function resolveTheme(choice: ThemeChoice): Theme {
   if (choice === "system") return byId(darkQuery?.matches === false ? SYSTEM_LIGHT : SYSTEM_DARK)!;
   return byId(choice) ?? byId(DEFAULT)!;
 }
@@ -98,7 +99,7 @@ function apply(theme: Theme, animate: boolean) {
   root.dataset.theme = theme.id;
 
   // Native window: background shows during resizes/startup, theme drives macOS chrome.
-  if ("__TAURI_INTERNALS__" in window) {
+  if (IS_DESKTOP) {
     const win = getCurrentWindow();
     syncWindowBackground();
     win.setTheme(theme.mode).catch(() => {});
@@ -109,7 +110,7 @@ function apply(theme: Theme, animate: boolean) {
 let windowTransparent = false;
 
 function syncWindowBackground() {
-  if (!("__TAURI_INTERNALS__" in window)) return;
+  if (!IS_DESKTOP) return;
   const color: string | [number, number, number, number] = windowTransparent ? [0, 0, 0, 0] : state.theme.swatch.bg;
   getCurrentWindow()
     .setBackgroundColor(color)

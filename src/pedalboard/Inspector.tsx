@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Search, Trash2, WandSparkles, Eraser, Keyboard, X } from "lucide-react";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
 import { nodeName, NodeView } from "../api";
 import { useResolved, useRuntime } from "./runtime";
 import {
@@ -29,8 +29,6 @@ interface Props {
   onBoardChange: (b: Board) => void;
   onGenerate: () => void;
 }
-
-const nodeLabel = (n: NodeView, all: NodeView[]) => nodeName(all, n.id);
 
 /** Assign a keyboard key: click, then press the key (Esc cancels). */
 function KeyField({ w, board, onKey }: { w: Widget; board: Board; onKey: (code: string | undefined) => void }) {
@@ -309,7 +307,7 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
                 {!nodes.some((n) => n.id === b.node) && <option value={b.node}>(missing)</option>}
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
-                    {nodeLabel(n, studio.nodes)}
+                    {nodeName(studio.nodes, n.id)}
                   </option>
                 ))}
               </select>
@@ -372,7 +370,7 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
                 <option value="master">Main output</option>
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
-                    {nodeLabel(n, studio.nodes)} output
+                    {nodeName(studio.nodes, n.id)} output
                   </option>
                 ))}
               </select>

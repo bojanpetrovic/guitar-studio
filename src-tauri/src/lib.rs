@@ -1,4 +1,5 @@
 mod editor;
+mod logging;
 mod presets;
 mod remote;
 mod warm;
@@ -76,13 +77,19 @@ fn list_devices() -> DeviceList {
 }
 
 #[tauri::command]
-fn set_audio_config(state: State<AppState>, config: AudioConfig) -> CmdResult<StudioView> {
+fn set_audio_config(
+    app: AppHandle,
+    state: State<AppState>,
+    config: AudioConfig,
+) -> CmdResult<StudioView> {
     let mut studio = state.studio.lock();
     let rate = studio.sample_rate();
     let result = studio.start_audio(config.clone());
     if (studio.sample_rate() - rate).abs() > 0.5 {
-        // Spares would still run at the old rate (the rig's plugins were reactivated).
+        // Spares would still run at the old rate (the rig's plugins were reactivated):
+        // drop them and preload fresh ones.
         state.warm.clear(&state);
+        warm::refresh(&app);
     }
     if let Ok(json) = serde_json::to_vec_pretty(&config) {
         let _ = std::fs::write(state.settings_path(), json);
@@ -110,11 +117,26 @@ async fn scan_plugins(app: AppHandle) -> CmdResult<Catalog> {
     }
     let _ = app.emit("catalog", state.catalog.lock().clone());
 
-    let exe = std::env::current_exe().map_err(err)?;
-    let (plugins, errors) =
-        tauri::async_runtime::spawn_blocking(move || plugins::scan_all_isolated(&exe))
+    let scanned = match std::env::current_exe() {
+        Ok(exe) => tauri::async_runtime::spawn_blocking(move || plugins::scan_all_isolated(&exe))
             .await
-            .map_err(err)?;
+            .map_err(|e| format!("the plugin scan failed: {e}")),
+        Err(e) => Err(format!("couldn't start the plugin scanner: {e}")),
+    };
+    let (plugins, errors) = match scanned {
+        Ok(found) => found,
+        Err(e) => {
+            // Keep the old list; never leave the catalog stuck "scanning".
+            let catalog = {
+                let mut c = state.catalog.lock();
+                c.scanning = false;
+                c.errors = vec![e.clone()];
+                c.clone()
+            };
+            let _ = app.emit("catalog", catalog);
+            return Err(e);
+        }
+    };
     let catalog = Catalog {
         plugins,
         errors,
@@ -142,6 +164,7 @@ fn add_plugin_node(
     x: f32,
     y: f32,
 ) -> CmdResult<(u32, StudioView)> {
+    let _busy = RigGuard::take()?;
     let desc = state
         .catalog
         .lock()
@@ -197,6 +220,7 @@ fn replace_plugin(
     id: u32,
     key: String,
 ) -> CmdResult<StudioView> {
+    let _busy = RigGuard::take()?;
     let desc = state
         .catalog
         .lock()
@@ -372,14 +396,43 @@ fn set_tuner(state: State<AppState>, enabled: bool, reference_a4: Option<f32>) {
 }
 
 /// Would loading this preset need to start any plugin? (If not it's instant, and the UI
-/// skips the "Loading…" notice.)
+/// skips the "Loading…" notice.) Async: it only reads, so it needn't queue on the main
+/// thread behind a plugin load.
 #[tauri::command]
-fn preset_ready(state: State<AppState>, name: String) -> bool {
-    state.presets.load(&name).is_ok_and(|patch| {
-        state
-            .warm
-            .covers(&state, &gs_engine::presets::patch_plugins(&patch))
-    })
+async fn preset_ready(app: AppHandle, name: String) -> bool {
+    preset_is_ready(&app.state::<AppState>(), &name)
+}
+
+fn preset_is_ready(state: &AppState, name: &str) -> bool {
+    state
+        .presets
+        .plugins_of(name)
+        .is_ok_and(|plugins| state.warm.covers(state, &plugins))
+}
+
+thread_local! {
+    static RIG_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Held (on the main thread) while a command starts plugins or swaps the rig. Some
+/// plugins pump the main run loop while they start (AU v3 async instantiation), which
+/// can run another command in the middle of this one; a second rig change arriving
+/// then is refused instead of interleaving with the first.
+pub(crate) struct RigGuard(());
+
+impl RigGuard {
+    pub(crate) fn take() -> CmdResult<Self> {
+        if RIG_BUSY.with(|busy| busy.replace(true)) {
+            return Err("Still loading the last change — try again in a moment".into());
+        }
+        Ok(Self(()))
+    }
+}
+
+impl Drop for RigGuard {
+    fn drop(&mut self) {
+        RIG_BUSY.with(|busy| busy.set(false));
+    }
 }
 
 // ---------------------------------------------------------------- phone remote
@@ -423,9 +476,9 @@ fn set_remote(app: AppHandle, state: State<AppState>, enabled: bool) -> remote::
 
 /// Make a new secret link; phones using the old one are disconnected.
 #[tauri::command]
-fn renew_remote_link(app: AppHandle, state: State<AppState>) -> CmdResult<remote::RemoteStatus> {
-    state.remote.renew_token(&app)?;
-    Ok(state.remote.status(&app))
+fn renew_remote_link(app: AppHandle, state: State<AppState>) -> remote::RemoteStatus {
+    state.remote.renew_token();
+    state.remote.status(&app)
 }
 
 // ---------------------------------------------------------------- app
@@ -480,7 +533,17 @@ pub fn run() {
         presets::rename_preset,
     ]);
     let desktop_hub = hub.clone();
+    logging::init();
     tauri::Builder::default()
+        // Closing the main window quits, even with plugin editor windows still open
+        // (otherwise audio and the phone server would run on, headless).
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                window.app_handle().exit(0);
+            }
+        })
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;

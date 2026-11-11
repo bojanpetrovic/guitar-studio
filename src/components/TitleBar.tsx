@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Cpu, LayoutDashboard, Loader, Settings2, Workflow } from "lucide-react";
 import { on } from "../transport";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
 import { useTelemetry } from "../api";
 import Meter from "./Meter";
 import Logo from "./Logo";

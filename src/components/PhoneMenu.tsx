@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Smartphone } from "lucide-react";
 import { api, RemoteStatus } from "../api";
 import { on } from "../transport";
-import { useStudio } from "../App";
+import { useActions } from "../studio";
+import { useDismiss } from "../hooks";
 
 export default function PhoneMenu() {
-  const { actions } = useStudio();
+  const actions = useActions();
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [copied, setCopied] = useState(false);
@@ -21,17 +22,7 @@ export default function PhoneMenu() {
     if (open) api.remoteStatus().then(setStatus, () => {});
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => root.current && !root.current.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(root, open, () => setOpen(false));
 
   const enabled = !!status?.enabled;
   const clients = status?.clients ?? 0;

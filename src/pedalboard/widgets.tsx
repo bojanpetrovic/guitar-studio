@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { meterLevel, useTelemetry } from "../api";
-import { useStudio } from "../App";
+import { useTelemetry } from "../api";
+import { usePeakLevels } from "../hooks";
+import { useStudio } from "../studio";
+import { clamp01, formatCents, isTyping, tickLit, TUNER_TICKS, tuneState } from "../util";
 import { Resolved, useResolved } from "./runtime";
 import { keyLabel, Widget } from "./types";
 
@@ -9,8 +11,6 @@ interface Props {
   /** Edit mode: render only, no interaction (the editor overlay handles pointers). */
   editing: boolean;
 }
-
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 /** Vertical-drag gesture for knobs: 180 px for the full range, Shift for fine control. */
 function useDrag(r: Resolved, editing: boolean) {
@@ -27,6 +27,7 @@ function useDrag(r: Resolved, editing: boolean) {
       r.setNorm(clamp01(start.current.n + (start.current.y - e.clientY) / range));
     },
     onPointerUp: () => (start.current = null),
+    onPointerCancel: () => (start.current = null),
     onWheel: (e: React.WheelEvent) => {
       if (editing || !r.ok) return;
       r.setNorm(clamp01(r.norm - e.deltaY / (e.shiftKey ? 4000 : 1000)));
@@ -65,7 +66,6 @@ function useControlKey(w: Widget, r: Resolved, editing: boolean, mode: KeyMode) 
     let down = false;
     let moved = false;
     let norm = 0;
-    const typing = (e: KeyboardEvent) => !!(e.target as HTMLElement | null)?.closest?.("input, textarea, select");
 
     const let_go = () => {
       if (!down) return;
@@ -81,7 +81,7 @@ function useControlKey(w: Widget, r: Resolved, editing: boolean, mode: KeyMode) 
       }
     };
     const onDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       const r = latest.current;
       if (e.code === code) {
         e.preventDefault();
@@ -134,7 +134,8 @@ function KeyCap({ code, held }: { code?: string; held: boolean }) {
 function Footswitch({ w, editing }: Props) {
   const r = useResolved(w);
   const isTap = w.binding.kind === "tap";
-  const beat = useTelemetry((t) => t?.beatCounter ?? 0);
+  // Only tap switches pulse with the beat; the others needn't re-render on every beat.
+  const beat = useTelemetry((t) => (isTap ? (t?.beatCounter ?? 0) : 0));
   const { studio } = useStudio();
   // A tap-tempo LED pulses on every metronome beat (re-keyed so the animation replays).
   const pulsing = isTap && studio.metronome.enabled;
@@ -163,6 +164,8 @@ function Footswitch({ w, editing }: Props) {
         style={{ width: size, height: size }}
         onPointerDown={down}
         onPointerUp={up}
+        // A cancelled touch (scroll, OS gesture) must not leave a momentary switch held.
+        onPointerCancel={up}
         aria-pressed={r.on}
         aria-label={w.label}
       />
@@ -240,6 +243,7 @@ function Fader({ w, editing }: Props) {
         }}
         onPointerMove={(e) => dragging.current && setFromY(e.clientY)}
         onPointerUp={() => (dragging.current = false)}
+        onPointerCancel={() => (dragging.current = false)}
         onDoubleClick={() => !editing && r.ok && r.setNorm(r.defaultNorm)}
       >
         <div className="pb-fader-fill" style={{ height: `${r.norm * 100}%` }} />
@@ -288,16 +292,9 @@ function Selector({ w, editing }: Props) {
 
 // ---------------------------------------------------------------- meter
 
-const EMPTY: [number, number] = [0, 0];
-
 function MeterWidget({ w }: Props) {
   const node = w.binding.kind === "meter" ? w.binding.node : "master";
-  const peak = useTelemetry((t) =>
-    !t ? EMPTY : node === "master" ? t.outputPeak : (t.nodes.find((n) => n.id === node)?.peak ?? EMPTY),
-  );
-  const shown = useRef<[number, number]>([0, 0]);
-  const levels = [0, 1].map((c) => Math.max(meterLevel(peak[c]), shown.current[c] - 0.035)) as [number, number];
-  shown.current = levels;
+  const { levels } = usePeakLevels((t) => (node === "master" ? t?.outputPeak : t?.nodes.find((n) => n.id === node)?.peak));
   const segments = Math.max(8, Math.floor((w.h - 30) / 7));
 
   return (
@@ -345,7 +342,7 @@ function TunerWidget({ w, editing }: Props) {
   const reading = useTelemetry((t) => t?.tuner ?? null);
   const on = studio.tunerEnabled;
   const cents = reading?.cents ?? 0;
-  const state = !on || !reading ? "idle" : Math.abs(cents) < 3 ? "in-tune" : Math.abs(cents) < 15 ? "close" : "off";
+  const state = tuneState(on && reading ? cents : null);
 
   return (
     <button
@@ -359,13 +356,11 @@ function TunerWidget({ w, editing }: Props) {
         {on && reading && <small>{reading.octave}</small>}
       </span>
       <span className="pb-tuner-strip">
-        {Array.from({ length: 21 }, (_, i) => {
-          const c = (i - 10) * 5;
-          const lit = on && reading && Math.abs(c - cents) <= 2.5;
-          return <span key={i} className={`pb-tick ${i === 10 ? "center" : ""} ${lit ? "lit" : ""}`} />;
-        })}
+        {TUNER_TICKS.map((i) => (
+          <span key={i} className={`pb-tick ${i === 10 ? "center" : ""} ${on && reading && tickLit(i, cents) ? "lit" : ""}`} />
+        ))}
       </span>
-      <span className="pb-sub mono">{on && reading ? `${cents > 0 ? "+" : ""}${cents.toFixed(1)}¢` : w.label}</span>
+      <span className="pb-sub mono">{on && reading ? formatCents(cents) : w.label}</span>
     </button>
   );
 }

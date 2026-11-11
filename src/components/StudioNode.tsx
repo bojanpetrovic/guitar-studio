@@ -1,21 +1,25 @@
 import { memo } from "react";
 import { Handle, NodeProps, Position } from "@xyflow/react";
 import { AudioWaveform, Blend, Cable, ExternalLink, Power, Replace, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
-import { useStudio } from "../App";
+import { useActions, useAudioStatus } from "../studio";
+import { formatDb } from "../util";
 import { formatLabel } from "../api";
 import type { StudioFlowNode } from "./GraphCanvas";
-import Fader, { formatDb } from "./Fader";
+import Fader from "./Fader";
 import Meter from "./Meter";
 import MixerStrips from "./MixerStrips";
 
 function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
   const n = data.node;
-  const { studio, actions } = useStudio();
-  const inputChannels = studio.audio?.inputChannels ?? 2;
+  // Narrow hooks: with `memo`, a node re-renders only when its own data or the audio
+  // device changes, not on every studio change.
+  const actions = useActions();
+  const audio = useAudioStatus();
+  const inputChannels = audio?.inputChannels ?? 2;
 
   const header = {
-    input: { icon: <Cable size={16} />, title: "Guitar In", sub: studio.audio?.inputDevice ?? "No input" },
-    output: { icon: <Speaker size={16} />, title: "Main Out", sub: studio.audio?.outputDevice ?? "No output" },
+    input: { icon: <Cable size={16} />, title: "Guitar In", sub: audio?.inputDevice ?? "No input" },
+    output: { icon: <Speaker size={16} />, title: "Main Out", sub: audio?.outputDevice ?? "No output" },
     gain: { icon: <SlidersHorizontal size={16} />, title: "Gain", sub: "Utility" },
     mixer: {
       icon: <Blend size={16} />,

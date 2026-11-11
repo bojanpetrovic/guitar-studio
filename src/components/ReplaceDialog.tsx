@@ -1,12 +1,14 @@
 // "Replace with…": pick another plugin for a plugin node. The node keeps its cables,
 // place and on/off state; pedalboard controls follow where parameter names match.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioWaveform, Piano, Replace, Search, X } from "lucide-react";
-import { useStudio } from "../App";
-import { formatLabel, NodeView, PluginDescriptor, pluginKey } from "../api";
+import { Replace, Search, X } from "lucide-react";
+import { useActions, useCatalog } from "../studio";
+import { NodeView, PluginDescriptor, pluginKey, pluginMatches } from "../api";
+import PluginRow from "./PluginRow";
 
 export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClose: () => void }) {
-  const { catalog, actions } = useStudio();
+  const catalog = useCatalog();
+  const actions = useActions();
   const current = node.plugin!;
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -19,7 +21,7 @@ export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClo
     return catalog.plugins
       .filter((p) => pluginKey(p) !== pluginKey(current))
       .filter((p) => (p.category === "instrument") === instrument)
-      .filter((p) => !q || p.name.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q))
+      .filter((p) => pluginMatches(p, q))
       .sort((a, b) => Number(b.vendor === current.vendor) - Number(a.vendor === current.vendor) || a.name.localeCompare(b.name));
   }, [catalog.plugins, query, current]);
   const sameVendor = query ? 0 : list.filter((p) => p.vendor === current.vendor && current.vendor).length;
@@ -44,20 +46,7 @@ export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClo
   };
 
   const item = (p: PluginDescriptor, i: number) => (
-    <button
-      key={pluginKey(p)}
-      className={`plugin-item ${i === at ? "at" : ""}`}
-      onClick={() => pick(p)}
-      onMouseMove={() => setAt(i)}
-      title={p.path}
-    >
-      <span className="plugin-icon">{p.category === "instrument" ? <Piano size={16} /> : <AudioWaveform size={16} />}</span>
-      <span className="plugin-text">
-        <span className="plugin-name">{p.name}</span>
-        <span className="plugin-vendor">{p.vendor || "Unknown vendor"}</span>
-      </span>
-      <span className={`badge fmt-${p.format}`}>{formatLabel[p.format]}</span>
-    </button>
+    <PluginRow key={pluginKey(p)} p={p} className={i === at ? "at" : ""} onClick={() => pick(p)} onMouseMove={() => setAt(i)} />
   );
 
   return (

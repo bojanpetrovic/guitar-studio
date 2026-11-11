@@ -6,8 +6,9 @@
 // (← / → are left for switching presets on stage.)
 import { useEffect, useRef } from "react";
 import { Minus, Pause, Play, Plus, Power, Volume2 } from "lucide-react";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
 import { useTelemetry } from "../api";
+import { BPM_MAX, BPM_MIN, clamp, formatCents, isTyping, tickLit, TUNER_TICKS, tuneState } from "../util";
 
 const SUBDIVISIONS = [
   { value: 1, label: "♩" },
@@ -15,10 +16,7 @@ const SUBDIVISIONS = [
   { value: 3, label: "3" },
   { value: 4, label: "16" },
 ];
-const BPM_MIN = 30;
-const BPM_MAX = 300;
-
-export function BeatDots({ beats, enabled }: { beats: number; enabled: boolean }) {
+function BeatDots({ beats, enabled }: { beats: number; enabled: boolean }) {
   const beat = useTelemetry((t) => t?.beat ?? 0);
   const counter = useTelemetry((t) => t?.beatCounter ?? 0);
   return (
@@ -41,9 +39,8 @@ function DockTuner() {
   const reading = useTelemetry((t) => t?.tuner ?? null);
   const live = on && !!reading;
   const cents = reading?.cents ?? 0;
-  const abs = Math.abs(cents);
-  const state = !live ? "idle" : abs < 3 ? "in-tune" : abs < 15 ? "close" : "off";
-  const changeA4 = (d: number) => actions.setTuner(on, Math.max(430, Math.min(450, a4 + d)));
+  const state = tuneState(live ? cents : null);
+  const changeA4 = (d: number) => actions.setTuner(on, clamp(a4 + d, 430, 450));
 
   return (
     <div className={`dock-tuner ${state} ${on ? "" : "disabled"}`}>
@@ -59,14 +56,12 @@ function DockTuner() {
         <small>{live ? reading!.octave : ""}</small>
       </span>
       <span className="dock-strip" aria-hidden>
-        {Array.from({ length: 21 }, (_, i) => {
-          const c = (i - 10) * 5;
-          const lit = live && Math.abs(c - Math.max(-50, Math.min(50, cents))) <= 2.5;
-          return <span key={i} className={`dock-tick ${i === 10 ? "center" : ""} ${lit ? "lit" : ""}`} />;
-        })}
+        {TUNER_TICKS.map((i) => (
+          <span key={i} className={`dock-tick ${i === 10 ? "center" : ""} ${live && tickLit(i, cents) ? "lit" : ""}`} />
+        ))}
       </span>
       <span className="dock-cents mono">
-        {live ? `${cents > 0 ? "+" : ""}${cents.toFixed(1)}¢` : on ? "play" : "off"}
+        {live ? formatCents(cents) : on ? "play" : "off"}
       </span>
       <span className="dock-hz mono muted">{live ? `${reading!.frequency.toFixed(1)} Hz` : ""}</span>
       <span className="dock-a4 mono" title="Reference pitch">
@@ -165,8 +160,8 @@ function useTransportKeys() {
     const onKey = (e: KeyboardEvent) => {
       // Handlers that claim a key (e.g. nudging a selected widget) call preventDefault first.
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.("input, textarea, select, [contenteditable='true'], .modal")) return;
+      if (isTyping(e)) return;
+      const target = e.target;
 
       const digit = /^Digit([1-9])$|^Numpad([1-9])$/.exec(e.code);
       if (digit && !e.shiftKey) {
@@ -193,7 +188,7 @@ function useTransportKeys() {
       if (!dir) return;
       e.preventDefault();
       // Track the value locally so held-down keys don't fall behind React renders.
-      const bpm = Math.max(BPM_MIN, Math.min(BPM_MAX, Math.round(m.bpm) + dir * (e.shiftKey ? 5 : 1)));
+      const bpm = clamp(Math.round(m.bpm) + dir * (e.shiftKey ? 5 : 1), BPM_MIN, BPM_MAX);
       metro.current = { ...m, bpm };
       actions.setMetronome({ bpm });
     };

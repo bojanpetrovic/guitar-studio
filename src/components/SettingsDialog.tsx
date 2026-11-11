@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
 import { api, AudioConfig, DeviceList } from "../api";
 
 const BUFFER_SIZES = [32, 64, 128, 256, 512, 1024];
@@ -12,7 +12,9 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.listDevices().then(setDevices);
+    api.listDevices().then(setDevices, (e) => actions.toast(String(e), "error"));
+  }, [actions]);
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

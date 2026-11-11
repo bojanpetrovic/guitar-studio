@@ -12,7 +12,7 @@
 
 use crate::{AppState, err, presets};
 use axum::Router;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State as AxState};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -26,12 +26,17 @@ use std::collections::HashMap;
 use std::net::{IpAddr, TcpListener, UdpSocket};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, watch};
 
 /// Default port; if it's taken we fall back to any free one.
 const DEFAULT_PORT: u16 = 7480;
+/// Largest message a phone may send (its commands are tiny).
+const MAX_MESSAGE: usize = 64 * 1024;
+const PING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+/// A session that hasn't been heard from for this long is closed.
+const SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +59,8 @@ impl Default for Settings {
 struct Running {
     port: u16,
     stop: watch::Sender<bool>,
+    /// Tells a server that failed apart from one started after it.
+    generation: u64,
 }
 
 /// What the desktop's phone dialog shows.
@@ -77,9 +84,12 @@ pub struct Hub {
     server: Mutex<Option<Running>>,
     error: Mutex<Option<String>>,
     clients: AtomicUsize,
-    /// Latest telemetry / rig state, as ready-to-send event frames.
-    telemetry: watch::Sender<Option<Arc<str>>>,
-    sync: watch::Sender<Option<Arc<str>>>,
+    generations: AtomicU64,
+    /// Bumped when the link is renewed: sessions on the old token end.
+    kick: watch::Sender<u64>,
+    /// Latest telemetry / rig state, as ready-to-send event frames (cheap to clone).
+    telemetry: watch::Sender<Option<Utf8Bytes>>,
+    sync: watch::Sender<Option<Utf8Bytes>>,
     /// Rig state changed through the desktop UI → tell the phones.
     phones_stale: AtomicBool,
     /// … through a phone → tell the desktop (and the phones).
@@ -150,19 +160,17 @@ impl Hub {
         if enabled {
             self.start(app)
         } else {
-            self.stop()
+            self.stop();
+            Ok(())
         }
     }
 
-    /// New secret: old links (and phones using them) stop working.
-    pub fn renew_token(self: &Arc<Self>, app: &AppHandle) -> Result<(), String> {
+    /// New secret: old links (and phones using them) stop working. The server keeps
+    /// running (and its port), only the sessions on the old token are ended.
+    pub fn renew_token(&self) {
         self.settings.lock().token = new_token();
         self.save();
-        if self.server.lock().is_some() {
-            self.stop()?;
-            self.start(app)?;
-        }
-        Ok(())
+        self.kick.send_modify(|k| *k += 1);
     }
 
     fn start(self: &Arc<Self>, app: &AppHandle) -> Result<(), String> {
@@ -183,12 +191,18 @@ impl Hub {
         };
         let port = listener.local_addr().map_err(err)?.port();
         let (stop, mut stopped) = watch::channel(false);
-        *self.server.lock() = Some(Running { port, stop });
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed);
+        *self.server.lock() = Some(Running {
+            port,
+            stop,
+            generation,
+        });
         *self.error.lock() = None;
 
         let ctx = Ctx {
             app: app.clone(),
             hub: self.clone(),
+            stop: stopped.clone(),
         };
         let router = Router::new()
             .route("/ws", get(open_socket))
@@ -208,7 +222,11 @@ impl Hub {
             if let Err(e) = served.await {
                 log::error!("phone remote server stopped: {e}");
                 *hub.error.lock() = Some(format!("The phone server stopped: {e}"));
-                hub.server.lock().take();
+                let mut server = hub.server.lock();
+                if server.as_ref().is_some_and(|r| r.generation == generation) {
+                    server.take();
+                }
+                drop(server);
                 let _ = app.emit("remote", hub.status(&app));
             }
         });
@@ -216,15 +234,10 @@ impl Hub {
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), String> {
+    fn stop(&self) {
         if let Some(running) = self.server.lock().take() {
             let _ = running.stop.send(true);
         }
-        Ok(())
-    }
-
-    fn stop_signal(&self) -> Option<watch::Receiver<bool>> {
-        self.server.lock().as_ref().map(|r| r.stop.subscribe())
     }
 
     fn token_ok(&self, token: Option<&String>) -> bool {
@@ -242,8 +255,9 @@ impl Hub {
     pub fn status(&self, app: &AppHandle) -> RemoteStatus {
         let settings = self.settings.lock().clone();
         let port = self.server.lock().as_ref().map(|r| r.port);
+        let ip = lan_ip();
         let url = port.map(|port| {
-            let host = lan_ip().map_or_else(|| "localhost".to_string(), |ip| ip.to_string());
+            let host = ip.map_or_else(|| "localhost".to_string(), |ip| ip.to_string());
             let token = &settings.token;
             match dev_server_port(app) {
                 // `tauri dev`: the UI comes from Vite; the page finds us through `ws`.
@@ -252,7 +266,7 @@ impl Hub {
             }
         });
         let mut error = self.error.lock().clone();
-        if port.is_some() && lan_ip().is_none() {
+        if port.is_some() && ip.is_none() {
             error = Some("This computer isn't on a network — connect to Wi-Fi first.".into());
         }
         RemoteStatus {
@@ -272,6 +286,8 @@ impl Hub {
 struct Ctx {
     app: AppHandle,
     hub: Arc<Hub>,
+    /// This server's stop signal (not a later server's).
+    stop: watch::Receiver<bool>,
 }
 
 /// The app's own (embedded) frontend. In `tauri dev` the UI lives on the Vite server.
@@ -308,7 +324,9 @@ async fn open_socket(
     // Accept even with a bad token so the phone can say why (a browser can't read the
     // status of a refused WebSocket).
     let allowed = ctx.hub.token_ok(query.get("t"));
-    ws.on_upgrade(move |socket| session(socket, ctx, allowed))
+    // Phones only send small commands.
+    ws.max_message_size(MAX_MESSAGE)
+        .on_upgrade(move |socket| session(socket, ctx, allowed))
 }
 
 // ---------------------------------------------------------------- websocket
@@ -334,14 +352,13 @@ async fn session(socket: WebSocket, ctx: Ctx, allowed: bool) {
     let (mut tx, mut rx) = socket.split();
     if !allowed {
         if let Some(frame) = event_frame("denied", &()) {
-            let _ = tx.send(Message::Text(frame.to_string().into())).await;
+            let _ = tx.send(Message::Text(frame)).await;
         }
         let _ = tx.close().await;
         return;
     }
-    let Some(mut stop) = ctx.hub.stop_signal() else {
-        return;
-    };
+    let mut stop = ctx.stop.clone();
+    let mut kick = ctx.hub.kick.subscribe();
     let mut telemetry = ctx.hub.telemetry.subscribe();
     let mut sync = ctx.hub.sync.subscribe();
     telemetry.mark_unchanged();
@@ -349,30 +366,39 @@ async fn session(socket: WebSocket, ctx: Ctx, allowed: bool) {
     ctx.hub.clients.fetch_add(1, Ordering::Relaxed);
     let _ = ctx.app.emit("remote", ctx.hub.status(&ctx.app));
 
+    // A phone that sleeps or leaves the Wi-Fi often just goes quiet: ping it, and give
+    // up when nothing (not even a pong) comes back for a while.
+    let mut ping = tokio::time::interval(PING_EVERY);
+    let mut heard = tokio::time::Instant::now();
+
     loop {
         // Requests are answered in order, one at a time: a `set` is always applied
         // before the `get` that follows it.
-        let frame: Arc<str> = tokio::select! {
-            msg = rx.next() => match msg {
-                Some(Ok(Message::Text(text))) => handle(&ctx, text.as_str()).await.into(),
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => continue,
-            },
+        let message = tokio::select! {
+            msg = rx.next() => {
+                heard = tokio::time::Instant::now();
+                match msg {
+                    Some(Ok(Message::Text(text))) => Message::Text(handle(&ctx, text.as_str()).await.into()),
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(_)) => continue, // pong, ping (answered by axum), binary
+                }
+            }
             changed = telemetry.changed() => {
                 if changed.is_err() { break; }
-                match telemetry.borrow_and_update().clone() { Some(f) => f, None => continue }
+                match telemetry.borrow_and_update().clone() { Some(f) => Message::Text(f), None => continue }
             }
             changed = sync.changed() => {
                 if changed.is_err() { break; }
-                match sync.borrow_and_update().clone() { Some(f) => f, None => continue }
+                match sync.borrow_and_update().clone() { Some(f) => Message::Text(f), None => continue }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed() > SILENCE_LIMIT { break; }
+                Message::Ping(Default::default())
             }
             _ = stop.changed() => break,
+            _ = kick.changed() => break,
         };
-        if tx
-            .send(Message::Text(frame.to_string().into()))
-            .await
-            .is_err()
-        {
+        if tx.send(message).await.is_err() {
             break;
         }
     }
@@ -438,6 +464,10 @@ fn dispatch(app: &AppHandle, cmd: &str, args: Value) -> Result<Value, String> {
         "remote_sync" => to_json(crate::remote_sync(s())),
         "get_studio" => to_json(crate::get_studio(s())),
         "list_presets" => to_json(presets::list_presets(s())),
+        "preset_ready" => to_json(crate::preset_is_ready(
+            &s(),
+            a.get::<String>("name")?.as_str(),
+        )),
         "load_preset" => to_json(presets::load_preset(app.clone(), s(), a.get("name")?)?),
         "plugin_params" => to_json(crate::plugin_params(s(), a.get("id")?)?),
         "get_param_values" => to_json(crate::get_param_values(s(), a.get("items")?)),
@@ -486,6 +516,7 @@ pub fn changes_state(cmd: &str) -> bool {
         || matches!(
             cmd,
             "plugin_params"
+                | "preset_ready"
                 | "set_plugin_param"
                 | "open_editor"
                 | "set_window_buttons"
@@ -503,7 +534,7 @@ struct Event<'a, T> {
     payload: &'a T,
 }
 
-fn event_frame<T: Serialize>(event: &str, payload: &T) -> Option<Arc<str>> {
+fn event_frame<T: Serialize>(event: &str, payload: &T) -> Option<Utf8Bytes> {
     serde_json::to_string(&Event { event, payload })
         .ok()
         .map(Into::into)
@@ -572,6 +603,7 @@ mod tests {
         assert!(!changes_state("get_param_values"));
         assert!(!changes_state("set_plugin_param"));
         assert!(!changes_state("remote_sync"));
+        assert!(!changes_state("preset_ready"));
     }
 
     #[test]

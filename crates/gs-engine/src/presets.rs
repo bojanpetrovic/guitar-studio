@@ -10,7 +10,7 @@ use crate::nodes::MAX_BLOCK;
 use crate::plugins::{self, PluginDescriptor, SharedPlugin};
 use crate::scenes::Scene;
 use crate::studio::NodeType;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use parking_lot::Mutex;
@@ -122,11 +122,16 @@ pub fn instantiate_plugins(
 ) -> (HashMap<NodeId, SharedPlugin>, Vec<String>) {
     let mut slots = HashMap::new();
     let mut warnings = Vec::new();
+    // Each spare's key, read once (spares may be live in the rig: lock them briefly).
+    let mut keys: Vec<String> = spares.iter().map(|p| p.lock().descriptor.key()).collect();
     for node in patch.nodes.iter().filter(|n| n.kind == NodeType::Plugin) {
         let Some(desc) = &node.plugin else { continue };
         let key = desc.key();
-        let plugin = match spares.iter().position(|p| p.lock().descriptor.key() == key) {
-            Some(i) => spares.swap_remove(i),
+        let plugin = match keys.iter().position(|k| *k == key) {
+            Some(i) => {
+                keys.swap_remove(i);
+                spares.swap_remove(i)
+            }
             None => match plugins::load_plugin(desc, sample_rate, MAX_BLOCK) {
                 Ok(slot) => Arc::new(Mutex::new(slot)),
                 Err(e) => {
@@ -153,16 +158,6 @@ pub fn instantiate_plugins(
         slots.insert(node.id, plugin);
     }
     (slots, warnings)
-}
-
-/// The plugins a patch uses (one entry per plugin node).
-pub fn patch_plugins(patch: &Patch) -> Vec<PluginDescriptor> {
-    patch
-        .nodes
-        .iter()
-        .filter(|n| n.kind == NodeType::Plugin)
-        .filter_map(|n| n.plugin.clone())
-        .collect()
 }
 
 /// A folder of `*.json` presets.
@@ -206,6 +201,12 @@ impl PresetStore {
             .collect::<String>()
             .trim_matches('.')
             .to_lowercase();
+        // A name of only dots would give ".json", a hidden file the list skips.
+        let stem = if stem.is_empty() {
+            "preset".to_string()
+        } else {
+            stem
+        };
         self.dir.join(format!("{stem}.json"))
     }
 
@@ -221,19 +222,22 @@ impl PresetStore {
         let mut out: Vec<PresetInfo> = entries
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .filter_map(|e| read_patch(&e.path()).ok())
-            .map(|p| PresetInfo {
-                plugins: p
-                    .nodes
-                    .iter()
-                    .filter_map(|n| n.plugin.as_ref().map(|d| d.name.clone()))
-                    .collect(),
-                name: p.name,
-                saved_at: p.saved_at,
+            .filter_map(|e| read_header(&e.path()).ok())
+            .map(|h| PresetInfo {
+                plugins: h.plugins().map(|d| d.name.clone()).collect(),
+                name: h.name,
+                saved_at: h.saved_at,
             })
             .collect();
         out.sort_by_key(|p| p.name.to_lowercase());
         out
+    }
+
+    /// The plugins a preset uses (one per plugin node), without decoding its states.
+    pub fn plugins_of(&self, name: &str) -> Result<Vec<PluginDescriptor>> {
+        let header = read_header(&self.path_for(name))
+            .with_context(|| format!("reading preset '{name}'"))?;
+        Ok(header.plugins().cloned().collect())
     }
 
     pub fn load(&self, name: &str) -> Result<Patch> {
@@ -274,16 +278,56 @@ impl PresetStore {
     }
 }
 
-fn read_patch(path: &Path) -> Result<Patch> {
-    let bytes = std::fs::read(path)?;
-    let patch: Patch = serde_json::from_slice(&bytes)?;
-    if patch.format != FORMAT_TAG {
-        return Err(anyhow!("not a Guitar Studio preset"));
+fn check_format(format: &str, version: u32) -> Result<()> {
+    if format != FORMAT_TAG {
+        bail!("not a Guitar Studio preset");
     }
-    if patch.version > FORMAT_VERSION {
+    if version > FORMAT_VERSION {
         bail!("preset was saved by a newer version of Guitar Studio");
     }
+    Ok(())
+}
+
+fn read_patch(path: &Path) -> Result<Patch> {
+    let patch: Patch = serde_json::from_slice(&std::fs::read(path)?)?;
+    check_format(&patch.format, patch.version)?;
     Ok(patch)
+}
+
+/// What listing presets needs from a file. Plugin states (often hundreds of KB of
+/// base64) and everything else are skipped without being decoded.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchHeader {
+    format: String,
+    version: u32,
+    name: String,
+    #[serde(default)]
+    saved_at: u64,
+    #[serde(default)]
+    nodes: Vec<NodeHeader>,
+}
+
+#[derive(Deserialize)]
+struct NodeHeader {
+    kind: NodeType,
+    #[serde(default)]
+    plugin: Option<PluginDescriptor>,
+}
+
+impl PatchHeader {
+    fn plugins(&self) -> impl Iterator<Item = &PluginDescriptor> {
+        self.nodes
+            .iter()
+            .filter(|n| n.kind == NodeType::Plugin)
+            .filter_map(|n| n.plugin.as_ref())
+    }
+}
+
+fn read_header(path: &Path) -> Result<PatchHeader> {
+    let header: PatchHeader = serde_json::from_slice(&std::fs::read(path)?)?;
+    check_format(&header.format, header.version)?;
+    Ok(header)
 }
 
 #[cfg(test)]

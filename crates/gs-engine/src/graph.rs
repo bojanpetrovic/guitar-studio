@@ -49,7 +49,6 @@ impl MixerChannel {
 }
 
 pub struct Step {
-    pub node: NodeId,
     pub processor: Box<dyn Processor>,
     pub shared: Arc<NodeShared>,
     /// Indices of earlier steps whose outputs are summed into this step's input.
@@ -64,14 +63,12 @@ pub struct Step {
 
 impl Step {
     pub fn new(
-        node: NodeId,
         processor: Box<dyn Processor>,
         shared: Arc<NodeShared>,
         sources: Vec<usize>,
         is_output: bool,
     ) -> Self {
         Self {
-            node,
             processor,
             shared,
             sources,
@@ -251,9 +248,9 @@ mod tests {
         let a = MixerChannel::new(-6.0206, 0.0, false); // ×0.5, center
         let b = MixerChannel::new(0.0, 1.0, false); // unity, hard right
         let steps = vec![
-            Step::new(1, Box::new(Dc(1.0)), NodeShared::new(1.0), vec![], false),
-            Step::new(2, Box::new(Dc(0.25)), NodeShared::new(1.0), vec![], false),
-            Step::new(3, Box::new(Thru), NodeShared::new(1.0), vec![0, 1], true)
+            Step::new(Box::new(Dc(1.0)), NodeShared::new(1.0), vec![], false),
+            Step::new(Box::new(Dc(0.25)), NodeShared::new(1.0), vec![], false),
+            Step::new(Box::new(Thru), NodeShared::new(1.0), vec![0, 1], true)
                 .with_channels(vec![a.clone(), b.clone()]),
         ];
         let mut s = Schedule::new(steps);

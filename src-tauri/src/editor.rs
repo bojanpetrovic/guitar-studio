@@ -178,7 +178,9 @@ fn fit_to_screen(window: &Window, (w, h): (f64, f64)) -> LogicalSize<f64> {
 /// Close a node's editor window (if open) before the node goes away.
 pub fn close(app: &AppHandle, state: &AppState, id: u32) {
     if let Some(window) = app.get_window(&label(id)) {
-        if let Some(plugin) = state.studio.lock().plugin(id)
+        // Own statement: the studio lock mustn't be held through the editor teardown.
+        let plugin = state.studio.lock().plugin(id);
+        if let Some(plugin) = plugin
             && let Some(editor) = plugin.lock().plugin.editor()
         {
             editor.close();

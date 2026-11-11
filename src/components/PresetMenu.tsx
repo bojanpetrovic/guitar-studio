@@ -1,6 +1,8 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, FilePlus2, Pencil, Save, Trash2 } from "lucide-react";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
+import { useDismiss } from "../hooks";
+import { timeAgo } from "../util";
 
 type Mode =
   | { kind: "list" }
@@ -8,14 +10,6 @@ type Mode =
   | { kind: "rename"; from: string; value: string }
   | { kind: "delete"; name: string }
   | { kind: "confirmNew" };
-
-function ago(secs: number) {
-  const d = Date.now() / 1000 - secs;
-  if (d < 60) return "just now";
-  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
-  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
-  return new Date(secs * 1000).toLocaleDateString();
-}
 
 export default function PresetMenu() {
   const { studio, presets, actions } = useStudio();
@@ -51,20 +45,7 @@ export default function PresetMenu() {
     return () => window.removeEventListener("keydown", onKey);
   }, [save, openSaveAs]);
 
-  // Click outside / Escape closes.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (root.current && !root.current.contains(e.target as Node)) close();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, close]);
+  useDismiss(root, open, close);
 
   const submitSaveAs = async (e: FormEvent) => {
     e.preventDefault();
@@ -131,7 +112,7 @@ export default function PresetMenu() {
                       <span className="preset-text">
                         <span className="preset-row-name">{p.name}</span>
                         <span className="preset-chain">
-                          {p.plugins.length ? p.plugins.join(" → ") : "No plugins"} · {ago(p.savedAt)}
+                          {p.plugins.length ? p.plugins.join(" → ") : "No plugins"} · {timeAgo(p.savedAt)}
                         </span>
                       </span>
                       <span className="row-actions" onClick={(e) => e.stopPropagation()}>

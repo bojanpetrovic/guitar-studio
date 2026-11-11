@@ -3,7 +3,7 @@
 // pedalboard. Edits always go into the active scene (the engine saves them on switch).
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Layers, Plus, Trash2 } from "lucide-react";
-import { useStudio } from "../App";
+import { useStudio } from "../studio";
 import { MAX_SCENES } from "../api";
 
 /** Height of the board variant, incl. padding (stage mode sizes the window with it). */

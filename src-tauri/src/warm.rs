@@ -10,10 +10,9 @@
 //!
 //! Spares are capped at what those two neighbours need, so memory stays bounded.
 
-use crate::AppState;
+use crate::{AppState, RigGuard};
 use gs_engine::nodes::MAX_BLOCK;
 use gs_engine::plugins::{self, PluginDescriptor, SharedPlugin};
-use gs_engine::presets::patch_plugins;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,11 +110,11 @@ pub fn refresh(app: &AppHandle) {
             let running = counts(state.studio.lock().plugin_instances().iter());
             let mut wanted: HashMap<String, (usize, PluginDescriptor)> = HashMap::new();
             for name in neighbours(&names, current.as_deref()) {
-                let Ok(patch) = state.presets.load(&name) else {
+                let Ok(plugins) = state.presets.plugins_of(&name) else {
                     continue;
                 };
                 let mut need: HashMap<String, (usize, PluginDescriptor)> = HashMap::new();
-                for d in patch_plugins(&patch) {
+                for d in plugins {
                     need.entry(d.key()).or_insert((0, d)).0 += 1;
                 }
                 for (key, (n, d)) in need {
@@ -129,6 +128,10 @@ pub fn refresh(app: &AppHandle) {
             let mut missing = Vec::new();
             {
                 let mut spares = state.warm.spares.lock();
+                // A switch since we started wants other neighbours: leave it to that run.
+                if !latest() {
+                    return;
+                }
                 let mut kept: HashMap<String, usize> = HashMap::new();
                 let mut released = Vec::new();
                 spares.retain(|p| {
@@ -160,6 +163,12 @@ pub fn refresh(app: &AppHandle) {
                 let main = app.clone();
                 let ran = app.run_on_main_thread(move || {
                     let state = main.state::<AppState>();
+                    // Not in the middle of a rig change (a plugin pumping the run loop
+                    // while it starts can run us nested); the next refresh catches up.
+                    let Ok(_busy) = RigGuard::take() else {
+                        let _ = done.send(());
+                        return;
+                    };
                     let rate = state.studio.lock().sample_rate();
                     match plugins::load_plugin(&desc, rate, MAX_BLOCK) {
                         Ok(slot) => {

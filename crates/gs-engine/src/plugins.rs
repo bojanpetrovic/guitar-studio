@@ -139,6 +139,66 @@ pub fn run_scan_child(format: &str) -> i32 {
     }
 }
 
+/// Longest one format's scan may take; a plugin that hangs while probed (a licence
+/// dialog, a deadlock) would otherwise leave the app "scanning" forever.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Like [`Command::output`], but kills the child and returns `None` after `timeout`.
+fn output_within(
+    mut command: Command,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Drain both pipes on their own threads so a chatty child can't block on a full pipe.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let (stdout, stderr) = (
+        stdout.join().unwrap_or_default(),
+        stderr.join().unwrap_or_default(),
+    );
+    Ok(status.map(|status| std::process::Output {
+        status,
+        stdout,
+        stderr,
+    }))
+}
+
 /// Scan all formats, each in its own child process of `exe`. A crashing format
 /// scan is reported in the returned error list rather than aborting the whole scan.
 pub fn scan_all_isolated(exe: &Path) -> (Vec<PluginDescriptor>, Vec<String>) {
@@ -148,8 +208,14 @@ pub fn scan_all_isolated(exe: &Path) -> (Vec<PluginDescriptor>, Vec<String>) {
         if !cfg!(target_vendor = "apple") && format.starts_with("au") {
             continue;
         }
-        match Command::new(exe).args(["--scan-plugins", format]).output() {
-            Ok(out) if out.status.success() => {
+        let mut command = Command::new(exe);
+        command.args(["--scan-plugins", format]);
+        match output_within(command, SCAN_TIMEOUT) {
+            Ok(None) => errors.push(format!(
+                "{format}: scan didn't finish within {} s and was stopped (a plugin may be waiting on a dialog)",
+                SCAN_TIMEOUT.as_secs()
+            )),
+            Ok(Some(out)) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let json = stdout
                     .lines()
@@ -160,7 +226,7 @@ pub fn scan_all_isolated(exe: &Path) -> (Vec<PluginDescriptor>, Vec<String>) {
                     Err(e) => errors.push(format!("{format}: bad scan output ({e})")),
                 }
             }
-            Ok(out) => errors.push(format!(
+            Ok(Some(out)) => errors.push(format!(
                 "{format}: scanner exited with {} — {}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr)
@@ -216,6 +282,8 @@ pub struct PluginSlot {
     pub descriptor: PluginDescriptor,
     /// Parameter metadata, read once at load. Index = the plugin's parameter index.
     pub params: Vec<ParamInfo>,
+    /// Stable parameter id → position in `params` (scenes and boards look up by id).
+    param_ids: HashMap<u32, usize>,
     /// Last value read or written per parameter index, served while reads would stall.
     pub value_cache: HashMap<usize, f64>,
     /// When a parameter was last written (see [`READ_QUIET`]).
@@ -253,7 +321,7 @@ impl PluginSlot {
     }
 
     pub fn param_index(&self, id: u32) -> Option<usize> {
-        self.params.iter().position(|p| p.id == id)
+        self.param_ids.get(&id).copied()
     }
 
     /// Set a parameter (by the plugin's own index) and remember the value.
@@ -350,11 +418,13 @@ pub fn load_plugin(
         ..desc.clone()
     };
     let params = read_params(plugin.as_ref());
+    let param_ids = params.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
     Ok(PluginSlot {
         plugin,
         io,
         descriptor,
         params,
+        param_ids,
         value_cache: HashMap::new(),
         last_write: None,
     })

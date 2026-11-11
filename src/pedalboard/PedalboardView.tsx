@@ -15,7 +15,9 @@ import {
   ChevronRight,
   Workflow,
 } from "lucide-react";
-import { useStudio } from "../App";
+import { usePresetStep, useStudio } from "../studio";
+import { isTyping } from "../util";
+import { useLink } from "../transport";
 import { api, nodeName, NodeView, ParamInfo } from "../api";
 import Inspector from "./Inspector";
 import { RuntimeContext, useParamRuntime } from "./runtime";
@@ -85,22 +87,6 @@ function chainOrder(nodes: NodeView[], edges: { from: number; to: number }[]) {
   return [...order, ...nodes.filter((n) => n.kind === "plugin" && !seen.has(n.id))];
 }
 
-/** Previous / next preset (wrapping), for the stage HUD and the phone. */
-export function usePresetStep() {
-  const { presets, actions } = useStudio();
-  const names = presets.presets.map((p) => p.name);
-  const at = presets.current ? names.indexOf(presets.current) : -1;
-  const step = useCallback(
-    (dir: 1 | -1) => {
-      if (names.length < 2 && at >= 0) return;
-      const next = names[(at + dir + names.length) % names.length];
-      if (next && next !== presets.current) actions.loadPreset(next);
-    },
-    [names, at, presets, actions],
-  );
-  return { step, count: names.length, current: presets.current };
-}
-
 /**
  * The only chrome on stage: a slim bar that fades in when the mouse moves and
  * fades out again while you play. ← / → (or Page Up / Page Down, [ / ]) step through presets.
@@ -112,28 +98,31 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
   const timer = useRef<number | undefined>(undefined);
   const { step, count } = usePresetStep();
 
+  // Awake on mount and on mouse movement; asleep 2.2 s later unless hovered.
   useEffect(() => {
     const wake = () => {
       setAwake(true);
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => !hovering.current && setAwake(false), 2200);
     };
+    wake();
+    window.addEventListener("pointermove", wake);
+    return () => {
+      window.clearTimeout(timer.current);
+      window.removeEventListener("pointermove", wake);
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if ((e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || isTyping(e)) return;
       if (e.key === "ArrowLeft" || e.key === "PageUp" || e.key === "[") step(-1);
       else if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === "]") step(1);
       else return;
       e.preventDefault();
     };
-    wake();
-    window.addEventListener("pointermove", wake);
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.clearTimeout(timer.current);
-      window.removeEventListener("pointermove", wake);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [step]);
 
   return (
@@ -172,7 +161,9 @@ export default function PedalboardView() {
   const board = draft ?? stored;
   const [mode, setMode] = useState<"play" | "edit">(remote || stored.widgets.length ? "play" : "edit");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const runtime = useParamRuntime(board, studio, true);
+  // A phone pauses polling while its link is down (requests would only pile up).
+  const link = useLink();
+  const runtime = useParamRuntime(board, studio, link === "open");
   const editing = mode === "edit";
   const selected = board.widgets.find((w) => w.id === selectedId) ?? null;
 
@@ -181,6 +172,7 @@ export default function PedalboardView() {
     if (!layoutKey) return;
     setMode(remote || parseBoard(studio.pedalboard).widgets.length ? "play" : "edit");
     setSelectedId(null);
+    setDraft(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on rig swaps
   }, [layoutKey]);
 
@@ -227,7 +219,7 @@ export default function PedalboardView() {
   useEffect(() => {
     if (remote) return;
     const onKey = (e: KeyboardEvent) => {
-      const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
+      const typing = isTyping(e);
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setMode((m) => (m === "edit" ? "play" : "edit"));
@@ -274,6 +266,7 @@ export default function PedalboardView() {
           };
     setDraft({ ...board, widgets: board.widgets.map((x) => (x.id === d.id ? next : x)) });
   };
+  // A cancelled gesture (lost capture, OS gesture) ends the drag like a release.
   const onWidgetUp = () => {
     if (drag.current?.moved && draft) commit(draft);
     drag.current = null;
@@ -304,8 +297,7 @@ export default function PedalboardView() {
   useEffect(() => {
     if (!editing) return;
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
+      if (isTyping(e)) return;
       if (!selected) return;
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
@@ -456,12 +448,14 @@ export default function PedalboardView() {
                           onPointerDown={(e) => onWidgetDown(e, w, "move")}
                           onPointerMove={onWidgetMove}
                           onPointerUp={onWidgetUp}
+                          onPointerCancel={onWidgetUp}
                         />
                         <div
                           className="pb-resize"
                           onPointerDown={(e) => onWidgetDown(e, w, "resize")}
                           onPointerMove={onWidgetMove}
                           onPointerUp={onWidgetUp}
+                          onPointerCancel={onWidgetUp}
                         />
                       </>
                     )}

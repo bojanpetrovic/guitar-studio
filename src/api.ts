@@ -30,6 +30,10 @@ export interface PluginDescriptor {
 
 export const pluginKey = (p: PluginDescriptor) => `${p.format}:${p.uniqueId}`;
 
+/** Does a plugin match a search (by name or vendor; `q` lower-cased and trimmed)? */
+export const pluginMatches = (p: PluginDescriptor, q: string) =>
+  !q || p.name.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q);
+
 export interface NodeView {
   id: number;
   kind: NodeType;

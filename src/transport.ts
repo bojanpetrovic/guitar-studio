@@ -10,7 +10,7 @@ export const IS_DESKTOP = "__TAURI_INTERNALS__" in window;
 export const IS_REMOTE = !IS_DESKTOP;
 
 /** Commands that only read; anything else counts as an edit (see `lastEdit`). */
-const READS = /^(get_|list_|remote_)|^plugin_params$/;
+const READS = /^(get_|list_|remote_)|^(plugin_params|preset_ready|open_editor)$/;
 
 let editedAt = -Infinity;
 /** When this window last changed something in the engine (performance.now()). */
@@ -40,6 +40,8 @@ interface Pending {
 }
 
 const TOKEN_KEY = "gs.remote.token";
+/** Generous: loading a preset with a big amp sim takes a few seconds. */
+const CALL_TIMEOUT_MS = 20_000;
 const HOST_KEY = "gs.remote.ws";
 
 /** The QR link carries `#t=<token>` (and `&ws=<host:port>` from a dev build); keep them for reloads. */
@@ -118,8 +120,12 @@ class Socket {
     if (this.ws?.readyState === WebSocket.OPEN) return;
     if (this.link === "denied" || this.link === "nolink") throw "Not connected to Guitar Studio";
     await new Promise<void>((resolve, reject) => {
-      const t = window.setTimeout(() => reject("Can't reach Guitar Studio"), 8000);
-      this.waiting.push(() => (window.clearTimeout(t), resolve()));
+      const go = () => (window.clearTimeout(t), resolve());
+      const t = window.setTimeout(() => {
+        this.waiting = this.waiting.filter((w) => w !== go);
+        reject("Can't reach Guitar Studio");
+      }, 8000);
+      this.waiting.push(go);
     });
   }
 
@@ -127,7 +133,15 @@ class Socket {
     await this.ready();
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      // A reply that never comes (the app hung, a dropped frame) mustn't wait forever.
+      const t = window.setTimeout(() => {
+        this.pending.delete(id);
+        reject("Guitar Studio didn't answer");
+      }, CALL_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve: (v) => (window.clearTimeout(t), resolve(v as T)),
+        reject: (e) => (window.clearTimeout(t), reject(e)),
+      });
       this.ws!.send(JSON.stringify({ id, cmd, args }));
     });
   }

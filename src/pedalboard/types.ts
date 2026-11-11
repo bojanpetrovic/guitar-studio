@@ -71,7 +71,7 @@ export const GRID = 10;
 export const BOARD_W = 1200;
 export const BOARD_H = 560;
 
-export const emptyBoard = (): Board => ({ version: 1, width: BOARD_W, height: BOARD_H, surface: "slate", widgets: [] });
+const emptyBoard = (): Board => ({ version: 1, width: BOARD_W, height: BOARD_H, surface: "slate", widgets: [] });
 
 /**
  * Put a board at the fixed size. Controls that reach past it (boards from before the size

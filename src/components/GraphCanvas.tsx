@@ -13,13 +13,13 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import { AlertTriangle } from "lucide-react";
-import { useStudio } from "../App";
-import { api, NodeView } from "../api";
+import { useStudio } from "../studio";
+import { NodeView, pluginKey } from "../api";
 import { useTheme } from "../themes";
 import StudioNode from "./StudioNode";
 import SceneBar from "./SceneBar";
 import SignalEdge from "./SignalEdge";
-import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "./PluginBrowser";
+import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "../dnd";
 
 export type StudioFlowNode = Node<{ node: NodeView }, "studio">;
 
@@ -129,7 +129,7 @@ export default function GraphCanvas() {
       if (!key) return;
       const target = key !== DRAG_GAIN && key !== DRAG_MIXER ? pluginNodeAt(e) : null;
       if (target) {
-        const plugin = catalog.plugins.find((p) => `${p.format}:${p.uniqueId}` === key);
+        const plugin = catalog.plugins.find((p) => pluginKey(p) === key);
         if (plugin) actions.replacePlugin(target.node.id, plugin);
         return;
       }
@@ -142,7 +142,7 @@ export default function GraphCanvas() {
         actions.addMixer(pos);
         return;
       }
-      const plugin = catalog.plugins.find((p) => `${p.format}:${p.uniqueId}` === key);
+      const plugin = catalog.plugins.find((p) => pluginKey(p) === key);
       if (plugin) actions.addPlugin(plugin, pos);
     },
     [screenToFlowPosition, catalog.plugins, actions, markTarget, pluginNodeAt],
@@ -170,9 +170,7 @@ export default function GraphCanvas() {
         isValidConnection={isValidConnection}
         onNodesDelete={(ns) => ns.forEach((n) => actions.remove(Number(n.id)))}
         onEdgesDelete={(es) => es.forEach((e) => actions.disconnect(Number(e.source), Number(e.target)))}
-        onNodeDragStop={(_, __, dragged) =>
-          dragged.forEach((n) => api.moveNode(Number(n.id), n.position.x, n.position.y))
-        }
+        onNodeDragStop={(_, __, dragged) => dragged.forEach((n) => actions.moveNode(Number(n.id), n.position.x, n.position.y))}
         deleteKeyCode={["Backspace", "Delete"]}
         fitView
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}

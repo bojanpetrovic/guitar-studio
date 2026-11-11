@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RotateCw, WifiOff } from "lucide-react";
 import Dock from "../components/Dock";
 import Logo from "../components/Logo";
-import PedalboardView, { usePresetStep } from "../pedalboard/PedalboardView";
+import PedalboardView from "../pedalboard/PedalboardView";
 import { Link, useLink } from "../transport";
-import { useStudio } from "../App";
+import { usePresetStep, useStudio } from "../studio";
 import { parseBoard } from "../pedalboard/types";
 
 const MESSAGES: Record<Exclude<Link, "open">, { title: string; body: string }> = {

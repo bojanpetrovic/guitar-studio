@@ -2,7 +2,7 @@
 //! instantiates plugins; plugins are loaded *before* taking the studio lock so the
 //! meters keep running while a heavy amp sim boots.
 
-use crate::{AppState, CmdResult, editor, warm};
+use crate::{AppState, CmdResult, RigGuard, editor, warm};
 use gs_engine::presets::{self, PresetInfo, PresetStore};
 use gs_engine::studio::StudioView;
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,7 @@ pub fn save_preset(
 
 #[tauri::command]
 pub fn load_preset(app: AppHandle, state: State<AppState>, name: String) -> CmdResult<PresetLoad> {
+    let _busy = RigGuard::take()?;
     let patch = state.presets.load(&name).map_err(|e| format!("{e:#}"))?;
     close_all_editors(&app, &state);
     // Offer the running instances and the warm spares for reuse (see warm.rs).
@@ -120,43 +121,47 @@ pub fn load_preset(app: AppHandle, state: State<AppState>, name: String) -> CmdR
     spares.append(&mut state.warm.take());
     let (slots, warnings) = presets::instantiate_plugins(&patch, sample_rate, &mut spares);
 
-    let studio = {
+    let (studio, rig) = {
         let mut studio = state.studio.lock();
         // What the new rig doesn't use is in `spares` too; the audio thread lets go of
         // it with the next schedule swap.
-        studio
-            .apply_patch(&patch, slots)
-            .map_err(|e| format!("{e:#}"))?;
-        studio.view()
+        if let Err(e) = studio.apply_patch(&patch, slots) {
+            // Some of these may still be in the graph: only the graveyard is safe for them.
+            state.graveyard.lock().extend(spares);
+            return Err(format!("{e:#}"));
+        }
+        // Under the studio lock, so a sync push never pairs the new rig with the old name.
+        set_current(&state, Some(patch.name.clone()));
+        (studio.view(), next_rig(&state))
     };
     state.warm.put_back(spares);
     warm::refresh(&app);
-    set_current(&state, Some(patch.name.clone()));
     Ok(PresetLoad {
         studio,
         presets: list(&state),
         warnings,
-        rig: next_rig(&state),
+        rig,
     })
 }
 
 /// Start over with an empty rig.
 #[tauri::command]
 pub fn new_preset(app: AppHandle, state: State<AppState>) -> CmdResult<PresetLoad> {
+    let _busy = RigGuard::take()?;
     close_all_editors(&app, &state);
-    let studio = {
+    let (studio, rig) = {
         let mut studio = state.studio.lock();
         let old = studio.reset_graph().map_err(|e| format!("{e:#}"))?;
         state.warm.put_back(old);
-        studio.view()
+        set_current(&state, None);
+        (studio.view(), next_rig(&state))
     };
-    set_current(&state, None);
     warm::refresh(&app);
     Ok(PresetLoad {
         studio,
         presets: list(&state),
         warnings: Vec::new(),
-        rig: next_rig(&state),
+        rig,
     })
 }
 

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useStudio } from "../App";
-import { api, nodeName as nameOf, ParamInfo, StudioView } from "../api";
+import { useStudio } from "../studio";
+import { api, nodeName as nameOf, ParamInfo, pluginKey, StudioView } from "../api";
+import { clamp01, FLOOR_DB, formatDb, formatPan } from "../util";
 import { Board, Widget } from "./types";
 
 /** How long a value set from the board wins over polled values (covers the round trip). */
@@ -25,63 +26,67 @@ export function useParamRuntime(board: Board, studio: StudioView, active: boolea
   const [paramsByNode, setParamsByNode] = useState<Map<string, ParamInfo[]>>(new Map());
   const [values, setValues] = useState<Map<string, number>>(new Map());
   const overrides = useRef(new Map<string, { v: number; t: number }>());
+  const requested = useRef(new Set<string>());
   const [, bump] = useState(0);
 
   // Cache is keyed by node id + plugin id: a preset load can reuse a node id for a different plugin.
   const pluginKeyOf = useCallback(
     (node: number) => {
       const n = studio.nodes.find((x) => x.id === node);
-      return n?.plugin ? `${node}:${n.plugin.format}:${n.plugin.uniqueId}` : undefined;
+      return n?.plugin ? `${node}:${pluginKey(n.plugin)}` : undefined;
     },
     [studio.nodes],
   );
 
+  // Fetch each plugin's parameter list once (a failed fetch may retry on the next change).
   useEffect(() => {
     for (const n of studio.nodes) {
       const k = pluginKeyOf(n.id);
-      if (!k || paramsByNode.has(k)) continue;
-      api
-        .pluginParams(n.id)
-        .then((list) => setParamsByNode((m) => new Map(m).set(k, list)))
-        .catch(() => setParamsByNode((m) => new Map(m).set(k, [])));
+      if (!k || requested.current.has(k)) continue;
+      requested.current.add(k);
+      api.pluginParams(n.id).then(
+        (list) => setParamsByNode((m) => new Map(m).set(k, list)),
+        () => requested.current.delete(k),
+      );
     }
-  }, [studio.nodes, pluginKeyOf, paramsByNode]);
+  }, [studio.nodes, pluginKeyOf]);
 
-  const bound = useMemo(() => {
+  // The bound parameters, as a stable signature: moving or restyling widgets doesn't
+  // restart the poll, only rebinding does.
+  const signature = useMemo(() => {
     const seen = new Set<string>();
-    const items: [number, number][] = [];
-    for (const w of board.widgets) {
-      if (w.binding.kind !== "param") continue;
-      const k = key(w.binding.node, w.binding.paramId);
-      if (!seen.has(k)) {
-        seen.add(k);
-        items.push([w.binding.node, w.binding.paramId]);
-      }
-    }
-    return items;
+    for (const w of board.widgets) if (w.binding.kind === "param") seen.add(key(w.binding.node, w.binding.paramId));
+    return [...seen].sort().join(",");
   }, [board.widgets]);
 
   useEffect(() => {
-    if (!active || bound.length === 0) return;
+    if (!active || !signature) return;
+    const bound = signature.split(",").map((k) => k.split(":").map(Number) as [number, number]);
     let stop = false;
+    let timer: number | undefined;
+    // One request at a time (a slow reply, e.g. while a plugin loads, must not be
+    // overtaken by a newer one), and no re-render when nothing changed.
     const tick = async () => {
       try {
         const res = await api.getParamValues(bound);
         if (stop) return;
-        const next = new Map<string, number>();
-        res.forEach((v, i) => v !== null && next.set(key(bound[i][0], bound[i][1]), v));
-        setValues(next);
+        setValues((prev) => {
+          const next = new Map<string, number>();
+          res.forEach((v, i) => v !== null && next.set(key(bound[i][0], bound[i][1]), v));
+          const same = next.size === prev.size && [...next].every(([k, v]) => prev.get(k) === v);
+          return same ? prev : next;
+        });
       } catch {
-        /* node removed mid-poll; next tick recovers */
+        /* node removed mid-poll, or the link is down; the next tick recovers */
       }
+      if (!stop) timer = window.setTimeout(tick, POLL_MS);
     };
     tick();
-    const id = setInterval(tick, POLL_MS);
     return () => {
       stop = true;
-      clearInterval(id);
+      window.clearTimeout(timer);
     };
-  }, [active, bound]);
+  }, [active, signature]);
 
   return useMemo<Runtime>(
     () => ({
@@ -137,7 +142,6 @@ export interface Resolved {
   release: () => void;
 }
 
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const noop = () => {};
 
 function fmtNumber(v: number) {
@@ -145,7 +149,7 @@ function fmtNumber(v: number) {
   return a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
 }
 
-export function formatParam(v: number, info: ParamInfo) {
+function formatParam(v: number, info: ParamInfo) {
   if (info.unit) return `${fmtNumber(v)} ${info.unit}`;
   if (info.min === 0 && info.max === 1) return `${Math.round(v * 100)}%`;
   return fmtNumber(v);
@@ -229,15 +233,16 @@ export function useResolved(w: Widget): Resolved {
     case "level": {
       const n = studio.nodes.find((x) => x.id === b.node);
       if (!n) return { ...BASE, target: "Missing node" };
-      const lo = w.options.min ?? -60;
-      const hi = w.options.max ?? (n.kind === "output" ? 12 : n.kind === "input" ? 24 : 24);
+      // Same ranges as the rig's faders: input trim ±24 dB, master up to +12.
+      const lo = w.options.min ?? (n.kind === "input" ? -24 : FLOOR_DB);
+      const hi = w.options.max ?? (n.kind === "output" ? 12 : 24);
       return {
         ...BASE,
         ok: true,
         target: `${nodeName(b.node)} · level`,
         norm: clamp01((n.gainDb - lo) / (hi - lo)),
         defaultNorm: clamp01((0 - lo) / (hi - lo)),
-        display: n.gainDb <= -59.9 ? "-∞ dB" : `${n.gainDb > 0 ? "+" : ""}${n.gainDb.toFixed(1)} dB`,
+        display: `${formatDb(n.gainDb)} dB`,
         setNorm: (x) => actions.setParam(n.id, "gainDb", Math.round((lo + clamp01(x) * (hi - lo)) * 10) / 10),
       };
     }
@@ -271,14 +276,14 @@ export function useResolved(w: Widget): Resolved {
           target: `${label} · pan`,
           norm: clamp01((p - lo) / (hi - lo)),
           defaultNorm: clamp01((0 - lo) / (hi - lo)),
-          display: Math.abs(p) < 0.02 ? "C" : `${p < 0 ? "L" : "R"}${Math.round(Math.abs(p) * 100)}`,
+          display: formatPan(p),
           setNorm: (x) => {
             const v = lo + clamp01(x) * (hi - lo);
             set("pan", Math.abs(v) < 0.03 ? 0 : Math.round(v * 100) / 100);
           },
         };
       }
-      const lo = w.options.min ?? -60;
+      const lo = w.options.min ?? FLOOR_DB;
       const hi = w.options.max ?? 12;
       return {
         ...BASE,
@@ -286,7 +291,7 @@ export function useResolved(w: Widget): Resolved {
         target: `${label} · volume`,
         norm: clamp01((strip.gainDb - lo) / (hi - lo)),
         defaultNorm: clamp01((0 - lo) / (hi - lo)),
-        display: strip.gainDb <= -59.9 ? "-∞ dB" : `${strip.gainDb > 0 ? "+" : ""}${strip.gainDb.toFixed(1)} dB`,
+        display: `${formatDb(strip.gainDb)} dB`,
         setNorm: (x) => set("gainDb", Math.round((lo + clamp01(x) * (hi - lo)) * 10) / 10),
       };
     }

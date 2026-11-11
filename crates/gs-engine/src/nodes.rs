@@ -136,19 +136,30 @@ pub struct PluginNode {
     plugin: SharedPlugin,
     scratch_in: Vec<Vec<f32>>,
     scratch_out: Vec<Vec<f32>>,
+    /// Input events (none yet: no MIDI in) and what the plugin reports back.
     events: EventList,
     out_events: EventList,
+    /// The last block couldn't get the lock (a long hold such as a state load):
+    /// don't spin again until it's free, just try once per block.
+    contended: bool,
 }
 
 impl PluginNode {
+    /// Built on the control thread (graph rebuild), so the brief lock is fine here.
     pub fn new(shared: Arc<NodeShared>, plugin: SharedPlugin) -> Self {
+        // Scratch for the channels this plugin actually has (usually 2), not the maximum.
+        let (ins, outs) = {
+            let slot = plugin.lock();
+            (slot.io.total_in, slot.io.total_out)
+        };
         Self {
             shared,
             plugin,
-            scratch_in: vec![vec![0.0; MAX_BLOCK]; MAX_PLUGIN_CHANNELS],
-            scratch_out: vec![vec![0.0; MAX_BLOCK]; MAX_PLUGIN_CHANNELS],
+            scratch_in: vec![vec![0.0; MAX_BLOCK]; ins],
+            scratch_out: vec![vec![0.0; MAX_BLOCK]; outs.max(1)],
             events: EventList::new(),
             out_events: EventList::new(),
+            contended: false,
         }
     }
 }
@@ -159,7 +170,13 @@ impl Processor for PluginNode {
             copy_through(input, output);
             return;
         }
-        let Some(mut guard) = lock_briefly(&self.plugin) else {
+        let guard = if self.contended {
+            self.plugin.try_lock()
+        } else {
+            lock_briefly(&self.plugin)
+        };
+        self.contended = guard.is_none();
+        let Some(mut guard) = guard else {
             copy_through(input, output);
             return;
         };
@@ -203,6 +220,9 @@ impl Processor for PluginNode {
                 &io.bus_in,
                 &io.bus_out,
             );
+            // Wrappers append what the plugin reports (CLAP doesn't clear it): clearing
+            // keeps the capacity, so this never allocates once warmed up.
+            self.out_events.clear();
             let mut pctx = ProcessContext {
                 sample_rate: ctx.sample_rate as f64,
                 max_block_size: MAX_BLOCK,

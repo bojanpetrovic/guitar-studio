@@ -1,28 +1,19 @@
-import { useMemo, useState } from "react";
-import { AudioWaveform, Blend, Loader2, Piano, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
-import { useStudio } from "../App";
-import { formatLabel, PluginDescriptor, pluginKey } from "../api";
+import { memo, useMemo, useState } from "react";
+import { AudioWaveform, Blend, Loader2, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { useActions, useCatalog } from "../studio";
+import { formatLabel, pluginKey, pluginMatches } from "../api";
+import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "../dnd";
+import { timeAgo } from "../util";
+import PluginRow from "./PluginRow";
 
 type FormatFilter = "all" | "vst3" | "au" | "clap";
 type KindFilter = "effects" | "instruments" | "all";
 
-export const DRAG_MIME = "application/x-gs-plugin";
-export const DRAG_GAIN = "gs:builtin:gain";
-export const DRAG_MIXER = "gs:builtin:mixer";
-/** Also set when dragging a real plugin (not Gain / Mixer): it can replace a plugin node. */
-export const DRAG_REPLACEABLE = "application/x-gs-replaces";
-
-function timeAgo(secs: number | null) {
-  if (!secs) return "never";
-  const d = Date.now() / 1000 - secs;
-  if (d < 60) return "just now";
-  if (d < 3600) return `${Math.floor(d / 60)} min ago`;
-  if (d < 86400) return `${Math.floor(d / 3600)} h ago`;
-  return `${Math.floor(d / 86400)} d ago`;
-}
-
-export default function PluginBrowser() {
-  const { catalog, actions } = useStudio();
+/** The plugin list. Reads only the catalog and the actions, so a fader move elsewhere
+ *  doesn't re-render hundreds of rows. */
+export default memo(function PluginBrowser() {
+  const catalog = useCatalog();
+  const actions = useActions();
   const [query, setQuery] = useState("");
   const [format, setFormat] = useState<FormatFilter>("all");
   const [kind, setKind] = useState<KindFilter>("effects");
@@ -33,7 +24,7 @@ export default function PluginBrowser() {
       if (format !== "all" && !(format === "au" ? p.format.startsWith("au") : p.format === format)) return false;
       if (kind === "effects" && p.category === "instrument") return false;
       if (kind === "instruments" && p.category !== "instrument") return false;
-      return !q || p.name.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q);
+      return pluginMatches(p, q);
     });
   }, [catalog.plugins, query, format, kind]);
 
@@ -124,24 +115,14 @@ export default function PluginBrowser() {
             )}
           </div>
         ) : (
-          list.map((p: PluginDescriptor) => (
-            <button
+          list.map((p) => (
+            <PluginRow
               key={pluginKey(p)}
-              className="plugin-item"
+              p={p}
               draggable
               onDragStart={(e) => onDragStart(e, pluginKey(p))}
               onClick={() => actions.addPlugin(p)}
-              title={p.path}
-            >
-              <span className="plugin-icon">
-                {p.category === "instrument" ? <Piano size={16} /> : <AudioWaveform size={16} />}
-              </span>
-              <span className="plugin-text">
-                <span className="plugin-name">{p.name}</span>
-                <span className="plugin-vendor">{p.vendor || "Unknown vendor"}</span>
-              </span>
-              <span className={`badge fmt-${p.format}`}>{formatLabel[p.format]}</span>
-            </button>
+            />
           ))
         )}
       </div>
@@ -156,4 +137,4 @@ export default function PluginBrowser() {
       )}
     </div>
   );
-}
+});

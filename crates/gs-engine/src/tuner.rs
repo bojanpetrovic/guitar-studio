@@ -83,8 +83,25 @@ pub fn spawn(
             let mut last_signal = Instant::now();
             let mut hp = HighPass::new(40.0, fs);
 
+            let mut idle = false;
             while !stop2.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(8));
+                // Off: forget everything, so turning it back on doesn't flash the last note
+                // (the audio tap stops feeding us meanwhile).
+                if !shared.enabled.load(Ordering::Relaxed) {
+                    if !idle {
+                        idle = true;
+                        history.clear();
+                        ring.fill(0.0);
+                        (fresh, acc, acc_n) = (0, 0.0, 0);
+                        *shared.reading.lock() = None;
+                    }
+                    if let Ok(chunk) = rx.read_chunk(rx.slots()) {
+                        chunk.commit_all();
+                    }
+                    continue;
+                }
+                idle = false;
                 let available = rx.slots();
                 if available == 0 {
                     continue;
@@ -114,12 +131,6 @@ pub fn spawn(
                 let (newer, older) = ring.split_at(ring_pos);
                 window[..older.len()].copy_from_slice(older);
                 window[older.len()..].copy_from_slice(newer);
-                if !shared.enabled.load(Ordering::Relaxed) {
-                    history.clear();
-                    *shared.reading.lock() = None;
-                    continue;
-                }
-
                 let rms = (window.iter().map(|x| x * x).sum::<f32>() / WINDOW as f32).sqrt();
                 let detected = if rms > 0.003 { mpm(&window, fs) } else { None };
                 match detected {
