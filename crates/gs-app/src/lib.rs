@@ -199,6 +199,8 @@ impl App {
 }
 
 const CATALOG_FILE: &str = "plugins.json";
+/// Favourite plugins (catalog keys), shared by the desktop app and the plugin.
+const FAVORITES_FILE: &str = "favorites.json";
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     std::fs::read(path)
@@ -294,6 +296,7 @@ pub fn changes_state(cmd: &str) -> bool {
                 | "scan_plugins"
                 | "set_remote"
                 | "renew_remote_link"
+                | "set_favorite"
         ))
 }
 
@@ -358,6 +361,12 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> CmdResult<Value> {
 
         // plugins
         "get_catalog" => to_json(app.catalog.lock().clone()),
+        "get_favorites" => to_json(favorites(app)),
+        "set_favorite" => to_json(set_favorite(
+            app,
+            &a.get::<String>("key")?,
+            a.get("favorite")?,
+        )?),
         "scan_plugins" => to_json(scan_plugins(app)?),
 
         // graph editing
@@ -504,6 +513,25 @@ fn set_audio_config(app: &Arc<App>, config: AudioConfig) -> CmdResult<StudioView
     Ok(studio.view())
 }
 
+/// The favourite plugins' keys, in the order they were added.
+fn favorites(app: &App) -> Vec<String> {
+    read_json(&app.data_dir.join(FAVORITES_FILE)).unwrap_or_default()
+}
+
+/// Mark or unmark a favourite. Read from the file each time: the desktop app and any
+/// plugin instances share it.
+fn set_favorite(app: &App, key: &str, favorite: bool) -> CmdResult<Vec<String>> {
+    let mut list = favorites(app);
+    list.retain(|k| k != key);
+    if favorite {
+        list.push(key.to_string());
+    }
+    let json = serde_json::to_vec_pretty(&list).map_err(err)?;
+    std::fs::write(app.data_dir.join(FAVORITES_FILE), json)
+        .map_err(|e| format!("couldn't save favourites: {e}"))?;
+    Ok(list)
+}
+
 /// Blocking (minutes for a big plugin folder): call off the main thread.
 fn scan_plugins(app: &Arc<App>) -> CmdResult<Catalog> {
     {
@@ -629,6 +657,40 @@ mod tests {
             Reply::new(8, Err("no".into())).to_json(),
             r#"{"id":8,"err":"no"}"#
         );
+    }
+
+    #[test]
+    fn favorites_are_kept_in_order_without_duplicates() {
+        struct Quiet;
+        impl Shell for Quiet {
+            fn emit(&self, _: &str, _: Value) {}
+            fn scanner(&self) -> std::io::Result<PathBuf> {
+                Err(std::io::Error::other("none"))
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("gs-favorites-{}", std::process::id()));
+        let app = App::new(dir.clone(), Box::new(Quiet), false).unwrap();
+        let set = |key: &str, on: bool| {
+            dispatch(
+                &app,
+                "set_favorite",
+                serde_json::json!({ "key": key, "favorite": on }),
+            )
+            .unwrap()
+        };
+        set("au:a", true);
+        set("vst3:b", true);
+        set("au:a", true);
+        assert_eq!(
+            set("clap:c", true),
+            serde_json::json!(["vst3:b", "au:a", "clap:c"])
+        );
+        set("vst3:b", false);
+        assert_eq!(
+            dispatch(&app, "get_favorites", Value::Null).unwrap(),
+            serde_json::json!(["au:a", "clap:c"])
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

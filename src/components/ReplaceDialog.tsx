@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Replace, Search, X } from "lucide-react";
 import { useActions, useCatalog } from "../studio";
 import { NodeView, PluginDescriptor, pluginKey, pluginMatches } from "../api";
+import { useFavorites } from "../favorites";
 import PluginRow from "./PluginRow";
 
 export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClose: () => void }) {
@@ -13,18 +14,23 @@ export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClo
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const favorites = useFavorites();
 
-  // Same kind as the current plugin (effect / instrument); its vendor's plugins first.
-  const list = useMemo(() => {
+  // Same kind as the current plugin (effect / instrument): favourites first, then its
+  // vendor's plugins, then the rest.
+  const { list, starred, sameVendor } = useMemo(() => {
     const q = query.trim().toLowerCase();
     const instrument = current.category === "instrument";
-    return catalog.plugins
+    const fav = new Set(favorites);
+    const rank = (p: PluginDescriptor) => (fav.has(pluginKey(p)) ? 0 : current.vendor && p.vendor === current.vendor ? 1 : 2);
+    const list = catalog.plugins
       .filter((p) => pluginKey(p) !== pluginKey(current))
       .filter((p) => (p.category === "instrument") === instrument)
       .filter((p) => pluginMatches(p, q))
-      .sort((a, b) => Number(b.vendor === current.vendor) - Number(a.vendor === current.vendor) || a.name.localeCompare(b.name));
-  }, [catalog.plugins, query, current]);
-  const sameVendor = query ? 0 : list.filter((p) => p.vendor === current.vendor && current.vendor).length;
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+    const count = (r: number) => (q ? 0 : list.filter((p) => rank(p) === r).length);
+    return { list, starred: count(0), sameVendor: count(1) };
+  }, [catalog.plugins, query, current, favorites]);
 
   useEffect(() => setAt(0), [query]);
   useEffect(() => {
@@ -66,10 +72,12 @@ export default function ReplaceDialog({ node, onClose }: { node: NodeView; onClo
         </div>
         <div className="replace-list" ref={listRef}>
           {list.length === 0 && <p className="muted replace-empty">No other {current.category === "instrument" ? "instruments" : "effects"} match.</p>}
+          {starred > 0 && <div className="section-label">Favourites</div>}
+          {list.slice(0, starred).map(item)}
           {sameVendor > 0 && <div className="section-label">More from {current.vendor}</div>}
-          {list.slice(0, sameVendor).map(item)}
-          {sameVendor > 0 && list.length > sameVendor && <div className="section-label">All plugins</div>}
-          {list.slice(sameVendor).map((p, i) => item(p, i + sameVendor))}
+          {list.slice(starred, starred + sameVendor).map((p, i) => item(p, i + starred))}
+          {starred + sameVendor > 0 && list.length > starred + sameVendor && <div className="section-label">All plugins</div>}
+          {list.slice(starred + sameVendor).map((p, i) => item(p, i + starred + sameVendor))}
         </div>
         <p className="hint">
           Cables, position and on/off stay. The new plugin starts at its own defaults, and scenes forget the old

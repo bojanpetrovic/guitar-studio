@@ -189,6 +189,9 @@ export const api = {
   setAudioConfig: (config: AudioConfig) => invoke<StudioView>("set_audio_config", { config }),
   getCatalog: () => invoke<Catalog>("get_catalog"),
   scanPlugins: () => invoke<Catalog>("scan_plugins"),
+  /** Favourite plugins' keys (`pluginKey`), shared with the plugin version. */
+  getFavorites: () => invoke<string[]>("get_favorites"),
+  setFavorite: (key: string, favorite: boolean) => invoke<string[]>("set_favorite", { key, favorite }),
   addPluginNode: (key: string, x: number, y: number) =>
     invoke<[number, StudioView]>("add_plugin_node", { key, x, y }),
   addGainNode: (x: number, y: number) => invoke<[number, StudioView]>("add_gain_node", { x, y }),

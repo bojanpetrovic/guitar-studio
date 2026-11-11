@@ -16,6 +16,10 @@ The first launch has no plugin list. Click the refresh icon in the Plugins panel
 Each format is scanned in its own child process, so a crashing plugin can't take the app
 down. A full scan takes about a minute and the results are cached.
 
+The plugin list opens and closes with the button next to the logo (or ⌘B). Star a
+plugin (☆ on hover) to keep it in **Favourites** at the top of the list. Favourites
+also come first in "Replace with…", and the desktop app and the DAW plugin share them.
+
 ## Replacing a plugin
 
 Swap a plugin for another without rewiring: click ⇄ on its node and pick one, with

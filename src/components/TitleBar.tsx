@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Cpu, LayoutDashboard, Loader, Settings2, Workflow } from "lucide-react";
+import { Cpu, LayoutDashboard, Loader, PanelLeftClose, PanelLeftOpen, Settings2, Workflow } from "lucide-react";
 import { IS_PLUGIN, on } from "../transport";
 import { useStudio } from "../studio";
 import { useTelemetry } from "../api";
@@ -9,6 +9,7 @@ import PresetMenu from "./PresetMenu";
 import ThemeMenu from "./ThemeMenu";
 import PhoneMenu from "./PhoneMenu";
 import MuteButton from "./MuteButton";
+import { toggleSidebar, useSidebarOpen } from "../sidebar";
 
 function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
@@ -35,6 +36,18 @@ function Warming() {
   );
 }
 
+/** Shows / hides the plugin list (rig view; the pedalboard has none). ⌘B. */
+function SidebarToggle() {
+  const { view } = useStudio();
+  const open = useSidebarOpen();
+  if (view !== "rig") return null;
+  return (
+    <button className="icon-btn ghost sidebar-toggle" onClick={toggleSidebar} title={`${open ? "Hide" : "Show"} plugins (⌘B)`}>
+      {open ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+    </button>
+  );
+}
+
 function ViewSwitch() {
   const { view, actions } = useStudio();
   useEffect(() => {
@@ -42,12 +55,13 @@ function ViewSwitch() {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === "1") actions.setView("rig");
       else if (e.key === "2") actions.setView("board");
+      else if (e.key.toLowerCase() === "b" && view === "rig") toggleSidebar();
       else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [actions]);
+  }, [actions, view]);
   return (
     <div className="segmented small view-switch">
       <button className={view === "rig" ? "on" : ""} onClick={() => actions.setView("rig")} title="Rig (⌘1)">
@@ -70,6 +84,7 @@ export default function TitleBar() {
         <Logo size={22} />
         <span className="brand-name">Guitar Studio</span>
       </div>
+      <SidebarToggle />
       <PresetMenu />
       <ViewSwitch />
       <Warming />

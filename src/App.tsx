@@ -25,6 +25,7 @@ import { recoverFrame } from "./stageWindow";
 import RemoteShell, { RemoteBoot } from "./remote/RemoteShell";
 import ReplaceDialog from "./components/ReplaceDialog";
 import { parseBoard } from "./pedalboard/types";
+import { useSidebarOpen } from "./sidebar";
 
 export default function App() {
   const [studio, setStudio] = useState<StudioView | null>(null);
@@ -503,8 +504,9 @@ export default function App() {
 
 /** The desktop window: title bar, plugin list, rig or pedalboard, and the dock. */
 function Desktop({ view, stage }: { view: View; stage: boolean }) {
+  const sidebar = useSidebarOpen();
   return (
-    <div className={`app view-${view} ${stage ? "stage-mode" : ""}`}>
+    <div className={`app view-${view} ${stage ? "stage-mode" : ""} ${sidebar ? "" : "sidebar-closed"}`}>
       <TitleBar />
       <aside className="sidebar left">
         <PluginBrowser />

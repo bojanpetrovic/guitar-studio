@@ -5,7 +5,6 @@ import {
   Connection,
   Controls,
   Edge,
-  MiniMap,
   Node,
   ReactFlow,
   useEdgesState,
@@ -184,16 +183,6 @@ export default function GraphCanvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="var(--grid-dot)" />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap
-          pannable
-          zoomable
-          position="bottom-right"
-          nodeColor={(n) => {
-            const kind = (n.data as { node: NodeView }).node.kind;
-            return kind === "plugin" ? "var(--accent)" : kind === "gain" || kind === "mixer" ? "var(--blue)" : "var(--green)";
-          }}
-          maskColor="var(--minimap-mask)"
-        />
       </ReactFlow>
       <SceneBar variant="canvas" />
     </div>

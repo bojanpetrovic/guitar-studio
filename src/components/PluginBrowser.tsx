@@ -1,13 +1,38 @@
 import { memo, useMemo, useState } from "react";
-import { AudioWaveform, Blend, Loader2, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
-import { useActions, useCatalog } from "../studio";
-import { formatLabel, pluginKey, pluginMatches } from "../api";
+import { AudioWaveform, Blend, Loader2, RefreshCw, Search, SlidersHorizontal, Star } from "lucide-react";
+import { StudioActions, useActions, useCatalog } from "../studio";
+import { formatLabel, PluginDescriptor, pluginKey, pluginMatches } from "../api";
 import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "../dnd";
+import { toggleFavorite, useFavorites } from "../favorites";
 import { timeAgo } from "../util";
 import PluginRow from "./PluginRow";
 
 type FormatFilter = "all" | "vst3" | "au" | "clap";
 type KindFilter = "effects" | "instruments" | "all";
+
+const onDragStart = (e: React.DragEvent, key: string) => {
+  e.dataTransfer.setData(DRAG_MIME, key);
+  if (key !== DRAG_GAIN && key !== DRAG_MIXER) e.dataTransfer.setData(DRAG_REPLACEABLE, "1");
+  e.dataTransfer.effectAllowed = "copy";
+};
+
+/** A plugin in the list, with its favourite star. */
+const Entry = memo(function Entry({ p, favorite, actions }: { p: PluginDescriptor; favorite: boolean; actions: StudioActions }) {
+  const key = pluginKey(p);
+  return (
+    <div className={`plugin-entry ${favorite ? "favorite" : ""}`}>
+      <PluginRow p={p} draggable onDragStart={(e) => onDragStart(e, key)} onClick={() => actions.addPlugin(p)} />
+      <button
+        className="fav-btn"
+        onClick={() => toggleFavorite(key).catch((e) => actions.toast(String(e), "error"))}
+        aria-pressed={favorite}
+        title={favorite ? "Remove from favourites" : "Add to favourites (kept at the top)"}
+      >
+        <Star size={14} fill={favorite ? "currentColor" : "none"} />
+      </button>
+    </div>
+  );
+});
 
 /** The plugin list. Reads only the catalog and the actions, so a fader move elsewhere
  *  doesn't re-render hundreds of rows. */
@@ -17,6 +42,7 @@ export default memo(function PluginBrowser() {
   const [query, setQuery] = useState("");
   const [format, setFormat] = useState<FormatFilter>("all");
   const [kind, setKind] = useState<KindFilter>("effects");
+  const favorites = useFavorites();
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -27,12 +53,11 @@ export default memo(function PluginBrowser() {
       return pluginMatches(p, q);
     });
   }, [catalog.plugins, query, format, kind]);
-
-  const onDragStart = (e: React.DragEvent, key: string) => {
-    e.dataTransfer.setData(DRAG_MIME, key);
-    if (key !== DRAG_GAIN && key !== DRAG_MIXER) e.dataTransfer.setData(DRAG_REPLACEABLE, "1");
-    e.dataTransfer.effectAllowed = "copy";
-  };
+  // Favourites first, in their own section (the rest stay alphabetical below).
+  const [starred, others] = useMemo(() => {
+    const fav = new Set(favorites);
+    return [list.filter((p) => fav.has(pluginKey(p))), list.filter((p) => !fav.has(pluginKey(p)))];
+  }, [list, favorites]);
 
   return (
     <div className="browser">
@@ -100,7 +125,7 @@ export default memo(function PluginBrowser() {
 
       <div className="section-label">
         {catalog.plugins.length ? `${list.length} of ${catalog.plugins.length}` : "Installed"}
-        <span className="muted"> · click to add to chain, drag to place, drop on a plugin to replace it</span>
+        <span className="muted"> · click to add to chain, drag to place, drop on a plugin to replace it, ☆ to keep it on top</span>
       </div>
 
       <div className="plugin-list">
@@ -115,15 +140,20 @@ export default memo(function PluginBrowser() {
             )}
           </div>
         ) : (
-          list.map((p) => (
-            <PluginRow
-              key={pluginKey(p)}
-              p={p}
-              draggable
-              onDragStart={(e) => onDragStart(e, pluginKey(p))}
-              onClick={() => actions.addPlugin(p)}
-            />
-          ))
+          <>
+            {starred.length > 0 && (
+              <div className="section-label list-label">
+                <Star size={11} fill="currentColor" /> Favourites
+              </div>
+            )}
+            {starred.map((p) => (
+              <Entry key={pluginKey(p)} p={p} favorite actions={actions} />
+            ))}
+            {starred.length > 0 && others.length > 0 && <div className="section-label list-label">All plugins</div>}
+            {others.map((p) => (
+              <Entry key={pluginKey(p)} p={p} favorite={false} actions={actions} />
+            ))}
+          </>
         )}
       </div>
 
