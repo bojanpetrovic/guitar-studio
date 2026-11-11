@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**", "**/target/**"] } },
+  // host: the phone remote loads the UI from here during `tauri dev` (see src-tauri/src/remote.rs).
+  server: { port: 1420, strictPort: true, host: true, watch: { ignored: ["**/src-tauri/**", "**/target/**"] } },
   build: { target: "safari16" },
 });

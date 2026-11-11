@@ -27,6 +27,8 @@ pub struct PresetLoad {
     pub studio: StudioView,
     pub presets: PresetList,
     pub warnings: Vec<String>,
+    /// Rig generation (see `AppState::rig`).
+    pub rig: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -61,6 +63,10 @@ fn list(state: &AppState) -> PresetList {
         last: read_session(state).last_preset,
         dir: state.presets.dir().display().to_string(),
     }
+}
+
+fn next_rig(state: &AppState) -> u64 {
+    state.rig.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
 /// Close every open plugin editor before the graph is swapped out.
@@ -119,6 +125,7 @@ pub fn load_preset(app: AppHandle, state: State<AppState>, name: String) -> CmdR
         studio,
         presets: list(&state),
         warnings,
+        rig: next_rig(&state),
     })
 }
 
@@ -137,6 +144,7 @@ pub fn new_preset(app: AppHandle, state: State<AppState>) -> CmdResult<PresetLoa
         studio,
         presets: list(&state),
         warnings: Vec::new(),
+        rig: next_rig(&state),
     })
 }
 

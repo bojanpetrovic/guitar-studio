@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
+import { call as invoke, on } from "./transport";
 
 // ---------------------------------------------------------------- types (mirror Rust)
 
@@ -151,6 +150,25 @@ export interface PresetLoad {
   studio: StudioView;
   presets: PresetList;
   warnings: string[];
+  /** Rig generation: bumps on every whole-rig swap. */
+  rig: number;
+}
+
+/** What the other screen (desktop ↔ phone) pushes as the `sync` event after a change. */
+export interface SyncState {
+  studio: StudioView;
+  preset: string | null;
+  rig: number;
+}
+
+export interface RemoteStatus {
+  enabled: boolean;
+  running: boolean;
+  /** The link the QR code encodes. */
+  url: string | null;
+  qrSvg: string | null;
+  clients: number;
+  error: string | null;
 }
 
 /** Error string the backend returns when a save would replace another preset. */
@@ -202,6 +220,11 @@ export const api = {
   newPreset: () => invoke<PresetLoad>("new_preset"),
   deletePreset: (name: string) => invoke<PresetList>("delete_preset", { name }),
   renamePreset: (from: string, to: string) => invoke<PresetList>("rename_preset", { from, to }),
+
+  remoteSync: () => invoke<SyncState>("remote_sync"),
+  remoteStatus: () => invoke<RemoteStatus>("remote_status"),
+  setRemote: (enabled: boolean) => invoke<RemoteStatus>("set_remote", { enabled }),
+  renewRemoteLink: () => invoke<RemoteStatus>("renew_remote_link"),
 };
 
 // ---------------------------------------------------------------- telemetry store
@@ -210,8 +233,8 @@ export const api = {
 let telemetry: Telemetry | null = null;
 const subscribers = new Set<() => void>();
 
-listen<Telemetry>("telemetry", (e) => {
-  telemetry = e.payload;
+on<Telemetry>("telemetry", (t) => {
+  telemetry = t;
   subscribers.forEach((fn) => fn());
 });
 

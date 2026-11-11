@@ -9,6 +9,8 @@ import {
   BINDING_LABEL,
   BindingKind,
   Board,
+  BOARD_H,
+  BOARD_W,
   BoardSurface,
   ENCLOSURES,
   KEYABLE,
@@ -197,10 +199,9 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
     return (
       <aside className="inspector">
         <h3>Board</h3>
-        <div className="insp-row">
-          <NumberField label="Width" value={board.width} step={10} onChange={(v) => v && onBoardChange({ ...board, width: Math.max(400, v) })} />
-          <NumberField label="Height" value={board.height} step={10} onChange={(v) => v && onBoardChange({ ...board, height: Math.max(200, v) })} />
-        </div>
+        <p className="insp-note muted">
+          {BOARD_W} × {BOARD_H} — every board has the same size, so presets look alike on stage and on the phone.
+        </p>
         <label className="insp-field">
           <span>Surface</span>
           <div className="segmented small">

@@ -66,13 +66,44 @@ export interface Board {
 
 export const GRID = 10;
 
-export const emptyBoard = (): Board => ({ version: 1, width: 1200, height: 560, surface: "slate", widgets: [] });
+/** Every board has this size, so presets look alike on stage and on the phone (and the
+ *  stage window doesn't jump when the preset changes). */
+export const BOARD_W = 1200;
+export const BOARD_H = 560;
+
+export const emptyBoard = (): Board => ({ version: 1, width: BOARD_W, height: BOARD_H, surface: "slate", widgets: [] });
+
+/**
+ * Put a board at the fixed size. Controls that reach past it (boards from before the size
+ * was fixed, or "Build from rig" for a long chain) are scaled down together to fit.
+ */
+export function fitBoard(b: Board): Board {
+  const right = Math.max(0, ...b.widgets.map((w) => w.x + w.w));
+  const bottom = Math.max(0, ...b.widgets.map((w) => w.y + w.h));
+  const k = Math.min(1, BOARD_W / right || 1, BOARD_H / bottom || 1);
+  const widgets =
+    k === 1
+      ? b.widgets
+      : b.widgets.map((w) => {
+          const m = WIDGET_META[w.type];
+          const ww = Math.min(BOARD_W, Math.max(m?.minW ?? 0, Math.round(w.w * k)));
+          const hh = Math.min(BOARD_H, Math.max(m?.minH ?? 0, Math.round(w.h * k)));
+          return {
+            ...w,
+            w: ww,
+            h: hh,
+            x: Math.max(0, Math.min(BOARD_W - ww, Math.round(w.x * k))),
+            y: Math.max(0, Math.min(BOARD_H - hh, Math.round(w.y * k))),
+          };
+        });
+  return { ...b, width: BOARD_W, height: BOARD_H, widgets };
+}
 
 /** Accept whatever is stored in a preset; anything unrecognisable becomes an empty board. */
 export function parseBoard(raw: unknown): Board {
   const b = raw as Partial<Board> | null;
   if (!b || b.version !== 1 || !Array.isArray(b.widgets)) return emptyBoard();
-  return { ...emptyBoard(), ...b, widgets: b.widgets.filter((w) => w && typeof w.id === "string") } as Board;
+  return fitBoard({ ...emptyBoard(), ...b, widgets: b.widgets.filter((w) => w && typeof w.id === "string") } as Board);
 }
 
 export const ACCENTS = ["#ffa630", "#ff5d5d", "#3ddc97", "#7aa2ff", "#c38bff", "#ffd84a", "#5ee0f0", "#f2f2f2"];

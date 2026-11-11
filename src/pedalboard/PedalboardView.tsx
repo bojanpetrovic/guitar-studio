@@ -27,6 +27,7 @@ import {
   Board,
   drawOrder,
   ENCLOSURES,
+  fitBoard,
   GRID,
   makeWidget,
   newId,
@@ -84,16 +85,9 @@ function chainOrder(nodes: NodeView[], edges: { from: number; to: number }[]) {
   return [...order, ...nodes.filter((n) => n.kind === "plugin" && !seen.has(n.id))];
 }
 
-/**
- * The only chrome on stage: a slim bar that fades in when the mouse moves and
- * fades out again while you play. ← / → (or Page Up / Page Down, [ / ]) step through presets.
- */
-function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) {
+/** Previous / next preset (wrapping), for the stage HUD and the phone. */
+export function usePresetStep() {
   const { presets, actions } = useStudio();
-  const [awake, setAwake] = useState(true);
-  const hovering = useRef(false);
-  const timer = useRef<number | undefined>(undefined);
-
   const names = presets.presets.map((p) => p.name);
   const at = presets.current ? names.indexOf(presets.current) : -1;
   const step = useCallback(
@@ -104,6 +98,19 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
     },
     [names, at, presets, actions],
   );
+  return { step, count: names.length, current: presets.current };
+}
+
+/**
+ * The only chrome on stage: a slim bar that fades in when the mouse moves and
+ * fades out again while you play. ← / → (or Page Up / Page Down, [ / ]) step through presets.
+ */
+function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) {
+  const { presets } = useStudio();
+  const [awake, setAwake] = useState(true);
+  const hovering = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  const { step, count } = usePresetStep();
 
   useEffect(() => {
     const wake = () => {
@@ -135,13 +142,13 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
       onPointerEnter={() => (hovering.current = true)}
       onPointerLeave={() => (hovering.current = false)}
     >
-      <button className="icon-btn ghost" onClick={() => step(-1)} disabled={names.length === 0} title="Previous preset (←)">
+      <button className="icon-btn ghost" onClick={() => step(-1)} disabled={count === 0} title="Previous preset (←)">
         <ChevronLeft size={16} />
       </button>
       <span className="stage-hud-name" data-tauri-drag-region>
         {presets.current ?? "Untitled rig"}
       </span>
-      <button className="icon-btn ghost" onClick={() => step(1)} disabled={names.length === 0} title="Next preset (→)">
+      <button className="icon-btn ghost" onClick={() => step(1)} disabled={count === 0} title="Next preset (→)">
         <ChevronRight size={16} />
       </button>
       <span className="stage-hud-sep" />
@@ -159,11 +166,11 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
 const STAGE_DOCK_H = 64;
 
 export default function PedalboardView() {
-  const { studio, presets, layoutKey, actions } = useStudio();
+  const { studio, presets, layoutKey, remote, actions } = useStudio();
   const stored = useMemo(() => parseBoard(studio.pedalboard), [studio.pedalboard]);
   const [draft, setDraft] = useState<Board | null>(null);
   const board = draft ?? stored;
-  const [mode, setMode] = useState<"play" | "edit">(stored.widgets.length ? "play" : "edit");
+  const [mode, setMode] = useState<"play" | "edit">(remote || stored.widgets.length ? "play" : "edit");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const runtime = useParamRuntime(board, studio, true);
   const editing = mode === "edit";
@@ -172,7 +179,7 @@ export default function PedalboardView() {
   // A freshly loaded rig opens ready to play if it has a board, ready to design if not.
   useEffect(() => {
     if (!layoutKey) return;
-    setMode(parseBoard(studio.pedalboard).widgets.length ? "play" : "edit");
+    setMode(remote || parseBoard(studio.pedalboard).widgets.length ? "play" : "edit");
     setSelectedId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on rig swaps
   }, [layoutKey]);
@@ -200,7 +207,9 @@ export default function PedalboardView() {
     return () => ro.disconnect();
   }, []);
   // ---- stage mode: playing a board shows only the board, in a frameless window
-  const stage = !editing && board.widgets.length > 0;
+  // (A phone just plays: no window to manage, its own header instead of the HUD.)
+  const stage = !remote && !editing && board.widgets.length > 0;
+  const bare = stage || remote;
   useEffect(() => {
     if (!stage) return;
     actions.setStage(true);
@@ -216,6 +225,7 @@ export default function PedalboardView() {
 
   // ⌘E flips between playing and designing; Esc leaves the stage for the editor.
   useEffect(() => {
+    if (remote) return;
     const onKey = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement)?.closest?.("input, textarea, select");
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
@@ -228,10 +238,10 @@ export default function PedalboardView() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [stage]);
+  }, [stage, remote]);
 
-  const margin = stage ? 0 : 48;
-  const scale = Math.max(0.2, Math.min((avail.w - margin) / board.width, (avail.h - margin) / board.height, stage ? 4 : 1.4));
+  const margin = stage ? 0 : remote ? 12 : 48;
+  const scale = Math.max(0.1, Math.min((avail.w - margin) / board.width, (avail.h - margin) / board.height, bare ? 4 : 1.4));
 
   // ---- editing gestures
   const drag = useRef<Drag | null>(null);
@@ -385,17 +395,16 @@ export default function PedalboardView() {
     const meter = makeWidget("meter", x + 270, 40);
     Object.assign(meter, { h: 300, label: "OUT" });
     widgets.push(tuner, tap, meter);
-    const width = Math.max(1200, x + 350);
-    commit({ ...board, width, height: Math.max(board.height, 420), widgets });
+    commit(fitBoard({ ...board, widgets }));
     setSelectedId(null);
     actions.toast(`Built a board for ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`, "success");
   };
 
   return (
     <RuntimeContext.Provider value={runtime}>
-      <div className={`pedalboard ${editing ? "editing" : "playing"} ${stage ? "on-stage" : ""}`}>
+      <div className={`pedalboard ${editing ? "editing" : "playing"} ${stage ? "on-stage" : ""} ${remote ? "on-phone" : ""}`}>
         {stage && <StageHud onEdit={() => setMode("edit")} onRig={() => actions.setView("rig")} />}
-        {!stage && (
+        {!bare && (
           <div className="pb-toolbar">
             <div className="segmented small mode">
               <button className={!editing ? "on" : ""} onClick={() => (setMode("play"), setSelectedId(null))}>
@@ -461,7 +470,13 @@ export default function PedalboardView() {
               </div>
             </div>
 
-            {board.widgets.length === 0 && (
+            {board.widgets.length === 0 && remote && (
+              <div className="pb-empty">
+                <h3>No pedalboard yet</h3>
+                <p>This rig doesn’t have a board. Design one in Guitar Studio on your computer (Pedalboard → Edit) and it shows up here.</p>
+              </div>
+            )}
+            {board.widgets.length === 0 && !remote && (
               <div className="pb-empty">
                 <h3>Design your pedalboard</h3>
                 <p>Lay out footswitches, knobs, faders and meters, and wire them to your plugins. Each preset keeps its own board.</p>

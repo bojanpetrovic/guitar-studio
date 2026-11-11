@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { ReactFlowProvider } from "@xyflow/react";
 import {
   api,
@@ -13,7 +12,9 @@ import {
   PresetLoad,
   StripField,
   StudioView,
+  SyncState,
 } from "./api";
+import { IS_REMOTE, lastEdit, on } from "./transport";
 import TitleBar from "./components/TitleBar";
 import PluginBrowser from "./components/PluginBrowser";
 import GraphCanvas from "./components/GraphCanvas";
@@ -22,6 +23,7 @@ import SettingsDialog from "./components/SettingsDialog";
 import Toasts, { Toast } from "./components/Toasts";
 import PedalboardView from "./pedalboard/PedalboardView";
 import { recoverFrame } from "./stageWindow";
+import RemoteShell, { RemoteBoot } from "./remote/RemoteShell";
 
 type Pos = { x: number; y: number };
 
@@ -71,6 +73,8 @@ interface Ctx {
   layoutKey: number;
   view: View;
   stage: boolean;
+  /** This UI is a phone remote-controlling the desktop app (play only). */
+  remote: boolean;
   actions: StudioActions;
 }
 
@@ -94,11 +98,16 @@ export default function App() {
   const toastId = useRef(1);
   const studioRef = useRef<StudioView | null>(null);
   studioRef.current = studio;
-  /** Take a fresh engine view but keep our pedalboard (the UI owns it between preset loads). */
+  /** Take a fresh engine view but keep our pedalboard (the UI owns it between preset loads).
+   *  A phone can't edit the board, so it always takes the engine's. */
   const applyView = useCallback(
-    (v: StudioView) => setStudio((s) => (s ? { ...v, pedalboard: s.pedalboard } : v)),
+    (v: StudioView) => setStudio((s) => (s && !IS_REMOTE ? { ...v, pedalboard: s.pedalboard } : v)),
     [],
   );
+  /** Rig generation we're showing (see SyncState). */
+  const rig = useRef<number | null>(null);
+  const presetsRef = useRef(presets);
+  presetsRef.current = presets;
 
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const toast = useCallback(
@@ -126,6 +135,7 @@ export default function App() {
   /** Apply a whole-rig swap (preset load / new). */
   const applyLoad = useCallback(
     (res: PresetLoad) => {
+      rig.current = res.rig;
       setStudio(res.studio);
       setPresets(res.presets);
       setLayoutKey((k) => k + 1);
@@ -154,21 +164,72 @@ export default function App() {
     document.documentElement.classList.toggle("stage-mode", stage);
   }, [stage]);
 
+  /** The other screen changed something: mirror it. A different rig generation means a
+   *  whole new rig (re-fit, fresh preset list). */
+  const applySync = useCallback(
+    (sync: SyncState) => {
+      const swapped = rig.current !== null && sync.rig !== rig.current;
+      rig.current = sync.rig;
+      if (swapped) {
+        setStudio(sync.studio);
+        setLayoutKey((k) => k + 1);
+      } else applyView(sync.studio);
+      if (swapped || sync.preset !== presetsRef.current.current) api.listPresets().then(setPresets, () => {});
+    },
+    [applyView],
+  );
+
+  // Pushes arrive while this window may be mid-gesture (a fader drag): hold them until
+  // our own edits settle, then read the engine fresh (the held push may predate them).
   useEffect(() => {
+    const QUIET_MS = 400;
+    let timer: number | undefined;
+    const settle = () => {
+      const wait = lastEdit() + QUIET_MS - performance.now();
+      if (wait > 0) timer = window.setTimeout(settle, wait + 10);
+      else api.remoteSync().then(applySync, () => {});
+    };
+    const un = on<SyncState>("sync", (sync) => {
+      if (performance.now() - lastEdit() >= QUIET_MS) applySync(sync);
+      else {
+        window.clearTimeout(timer);
+        settle();
+      }
+    });
+    // A phone that reconnects may have missed pushes.
+    const unRe = on("reconnected", () => {
+      api.remoteSync().then(applySync, () => {});
+      api.listPresets().then(setPresets, () => {});
+    });
+    return () => {
+      window.clearTimeout(timer);
+      un();
+      unRe();
+    };
+  }, [applySync]);
+
+  useEffect(() => {
+    if (IS_REMOTE) {
+      Promise.all([api.remoteSync(), api.listPresets()]).then(([sync, p]) => {
+        rig.current = sync.rig;
+        setStudio(sync.studio);
+        setPresets(p);
+      }, () => {});
+      return;
+    }
     recoverFrame();
     // On launch, bring back the rig that was active last time (only into a blank studio,
     // so a dev hot-reload doesn't clobber work in progress).
-    Promise.all([api.getStudio(), api.listPresets()]).then(([s, p]) => {
+    Promise.all([api.remoteSync(), api.listPresets()]).then(([sync, p]) => {
+      const s = sync.studio;
+      rig.current = sync.rig;
       setStudio(s);
       setPresets(p);
       const blank = s.nodes.length <= 2;
       if (blank && !p.current && p.last && p.presets.some((x) => x.name === p.last)) loadPresetNow(p.last);
     });
     api.getCatalog().then(setCatalog);
-    const un = listen<Catalog>("catalog", (e) => setCatalog(e.payload));
-    return () => {
-      un.then((f) => f());
-    };
+    return on<Catalog>("catalog", setCatalog);
   }, []);
 
   /** Wire a freshly added node into the main chain, just before the Output. */
@@ -358,10 +419,18 @@ export default function App() {
     [toast, guard, dismiss, appendToChain, chainPosition, loadPresetNow, applyLoad, applyView],
   );
 
-  if (!studio) return <div className="boot">Starting audio engine…</div>;
+  if (!studio) return IS_REMOTE ? <RemoteBoot /> : <div className="boot">Starting audio engine…</div>;
+
+  if (IS_REMOTE)
+    return (
+      <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view: "board", stage: false, remote: true, actions }}>
+        <RemoteShell />
+        <Toasts toasts={toasts} onDismiss={dismiss} />
+      </StudioContext.Provider>
+    );
 
   return (
-    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, stage, actions }}>
+    <StudioContext.Provider value={{ studio, catalog, presets, layoutKey, view, stage, remote: false, actions }}>
       <ReactFlowProvider>
         <div className={`app view-${view} ${stage ? "stage-mode" : ""}`}>
           <TitleBar />

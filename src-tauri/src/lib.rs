@@ -1,5 +1,6 @@
 mod editor;
 mod presets;
+mod remote;
 
 use gs_engine::Studio;
 use gs_engine::audio::{self, AudioConfig, DeviceList};
@@ -11,6 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -40,6 +42,10 @@ pub struct AppState {
     presets: gs_engine::presets::PresetStore,
     /// Name of the preset the current rig was loaded from / last saved as.
     current_preset: Mutex<Option<String>>,
+    /// Bumped on every whole-rig swap (preset load / new), so other clients can tell a
+    /// new rig from an edited one.
+    rig: AtomicU64,
+    remote: Arc<remote::Hub>,
 }
 
 impl AppState {
@@ -320,12 +326,104 @@ fn set_tuner(state: State<AppState>, enabled: bool, reference_a4: Option<f32>) {
     state.studio.lock().set_tuner(enabled, reference_a4);
 }
 
+// ---------------------------------------------------------------- phone remote
+
+/// Everything a second screen needs to mirror the rig (pushed as the `sync` event).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncState {
+    studio: StudioView,
+    preset: Option<String>,
+    rig: u64,
+}
+
+fn sync_state(state: &AppState) -> SyncState {
+    SyncState {
+        studio: state.studio.lock().view(),
+        preset: state.current_preset.lock().clone(),
+        rig: state.rig.load(Ordering::Relaxed),
+    }
+}
+
+#[tauri::command]
+fn remote_sync(state: State<AppState>) -> SyncState {
+    sync_state(&state)
+}
+
+#[tauri::command]
+fn remote_status(app: AppHandle, state: State<AppState>) -> remote::RemoteStatus {
+    state.remote.status(&app)
+}
+
+#[tauri::command]
+fn set_remote(app: AppHandle, state: State<AppState>, enabled: bool) -> remote::RemoteStatus {
+    let result = state.remote.set_enabled(&app, enabled);
+    let mut status = state.remote.status(&app);
+    if let Err(e) = result {
+        status.error = Some(e);
+    }
+    status
+}
+
+/// Make a new secret link; phones using the old one are disconnected.
+#[tauri::command]
+fn renew_remote_link(app: AppHandle, state: State<AppState>) -> CmdResult<remote::RemoteStatus> {
+    state.remote.renew_token(&app)?;
+    Ok(state.remote.status(&app))
+}
+
 // ---------------------------------------------------------------- app
+
+/// Pins down the handler's type so it can be wrapped (see `invoke_handler` below).
+fn desktop_commands<F: Fn(tauri::ipc::Invoke) -> bool>(f: F) -> F {
+    f
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let hub = Arc::new(remote::Hub::default());
+    let commands = desktop_commands(tauri::generate_handler![
+        get_studio,
+        list_devices,
+        set_audio_config,
+        get_catalog,
+        scan_plugins,
+        add_plugin_node,
+        add_gain_node,
+        add_mixer_node,
+        set_mixer_strip,
+        remove_node,
+        connect,
+        disconnect,
+        set_node_param,
+        set_bypass,
+        move_node,
+        open_editor,
+        set_window_buttons,
+        add_scene,
+        select_scene,
+        rename_scene,
+        delete_scene,
+        set_metronome,
+        set_tuner,
+        plugin_params,
+        set_plugin_param,
+        get_param_values,
+        set_pedalboard,
+        remote_sync,
+        remote_status,
+        set_remote,
+        renew_remote_link,
+        presets::list_presets,
+        presets::save_preset,
+        presets::load_preset,
+        presets::new_preset,
+        presets::delete_preset,
+        presets::rename_preset,
+    ]);
+    let desktop_hub = hub.clone();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let catalog: Catalog = std::fs::read(data_dir.join("plugins.json"))
@@ -350,6 +448,7 @@ pub fn run() {
             }
             let studio = Arc::new(Mutex::new(studio));
             let presets = gs_engine::presets::PresetStore::new(data_dir.join("presets"))?;
+            let data_dir_for_remote = data_dir.clone();
             app.manage(AppState {
                 studio: studio.clone(),
                 catalog: Mutex::new(catalog),
@@ -357,10 +456,15 @@ pub fn run() {
                 data_dir,
                 presets,
                 current_preset: Mutex::new(None),
+                rig: AtomicU64::new(0),
+                remote: hub.clone(),
             });
+            hub.init(app.handle(), data_dir_for_remote);
 
-            // Telemetry pump: meters, tuner and metronome beat at ~30 Hz.
+            // Telemetry pump: meters, tuner and metronome beat at ~30 Hz, to the window
+            // and to connected phones; plus rig changes made on one side for the other.
             let handle = app.handle().clone();
+            let hub = hub.clone();
             std::thread::Builder::new()
                 .name("gs-telemetry".into())
                 .spawn(move || {
@@ -372,8 +476,21 @@ pub fn run() {
                             s.collect_garbage();
                             s.telemetry()
                         };
-                        let _ = handle.emit("telemetry", t);
+                        let _ = handle.emit("telemetry", &t);
+                        hub.push_telemetry(&t);
                         tick = tick.wrapping_add(1);
+                        if tick.is_multiple_of(2) {
+                            let (phones, desktop) = hub.take_stale();
+                            if phones || desktop {
+                                let sync = sync_state(&handle.state::<AppState>());
+                                if phones {
+                                    hub.push_sync(&sync);
+                                }
+                                if desktop {
+                                    let _ = handle.emit("sync", &sync);
+                                }
+                            }
+                        }
                         if tick.is_multiple_of(30) {
                             let h = handle.clone();
                             let _ = handle.run_on_main_thread(move || h.state::<AppState>().reap());
@@ -382,41 +499,15 @@ pub fn run() {
                 })?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            get_studio,
-            list_devices,
-            set_audio_config,
-            get_catalog,
-            scan_plugins,
-            add_plugin_node,
-            add_gain_node,
-            add_mixer_node,
-            set_mixer_strip,
-            remove_node,
-            connect,
-            disconnect,
-            set_node_param,
-            set_bypass,
-            move_node,
-            open_editor,
-            set_window_buttons,
-            add_scene,
-            select_scene,
-            rename_scene,
-            delete_scene,
-            set_metronome,
-            set_tuner,
-            plugin_params,
-            set_plugin_param,
-            get_param_values,
-            set_pedalboard,
-            presets::list_presets,
-            presets::save_preset,
-            presets::load_preset,
-            presets::new_preset,
-            presets::delete_preset,
-            presets::rename_preset,
-        ])
+        // Desktop edits are mirrored to connected phones.
+        .invoke_handler(move |invoke| {
+            let notify = remote::changes_state(invoke.message.command());
+            let handled = commands(invoke);
+            if notify {
+                desktop_hub.desktop_changed();
+            }
+            handled
+        })
         .run(tauri::generate_context!())
         .expect("error while running Guitar Studio");
 }

@@ -90,6 +90,26 @@ under the board* hides it there).
 - Switching only sets the parameters that differ, a parameter at a time, so the audio
   keeps running (Archetype Nolly: ~11 ms; Pro-Q 3 / Timeless 3: ~1 ms).
 
+## Phone remote
+
+Play the pedalboard from your phone. Click the phone icon in the title bar, switch on
+*Allow phones on this Wi-Fi* and scan the QR code with the phone's camera. The phone
+opens the rig's pedalboard in its browser; nothing needs installing.
+
+- The phone controls the whole rig: switches, knobs and faders, scenes, the preset
+  (‹ ›), the tuner and the metronome. Turn the phone sideways for a bigger board.
+- Both screens stay in step: a change on either shows up on the other.
+- The phone plays but doesn't edit: design boards and the rig on the computer.
+- The link holds a secret key. *New link* makes a new one and drops phones using the old.
+- The remote stays on across launches until you switch it off. The first time, macOS
+  may ask whether Guitar Studio may accept incoming connections — allow it.
+- iPhone: Share → *Add to Home Screen* opens it full screen. Android has a full-screen button.
+- The phone and computer must be on the same network. The page is plain `http` on the
+  local network, so the browser may still dim and lock the phone's screen while you play.
+
+Under `make dev`, the QR code points at the Vite server (it listens on the network for
+this) and the page connects back to the app's port, 7480.
+
 ## Tuner & metronome
 
 A slim dock under the canvas, always there (on stage too): note, a cents strip and
@@ -122,7 +142,7 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
 | Path | What |
 |---|---|
 | `crates/gs-engine` | Audio engine: cpal I/O, graph compiler, RT executor, plugin hosting (truce-rack), tuner (McLeod pitch method), metronome |
-| `src-tauri` | Tauri shell: commands, plugin-editor windows, telemetry pump (30 Hz) |
+| `src-tauri` | Tauri shell: commands, plugin-editor windows, telemetry pump (30 Hz), phone-remote server (`remote.rs`) |
 | `src` | React UI: React Flow patch canvas, plugin browser, tuner, metronome, settings |
 | `docs/RESEARCH.md` | Tech research and roadmap |
 | `vendor/truce-rack-vst3` | Patched copy of the VST3 host crate (see `vendor/README.md`) |
