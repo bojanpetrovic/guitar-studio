@@ -33,7 +33,7 @@ export interface WidgetOptions {
   fontSize?: number;
   /**
    * Keyboard key (KeyboardEvent.code, e.g. "KeyA") that plays this control in play
-   * mode: switches press, knobs / faders / selectors are held and nudged with ↑ / ↓.
+   * mode: switches press; knobs / faders / selectors are selected, then nudged with ↑ / ↓.
    */
   key?: string;
 }

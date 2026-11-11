@@ -71,8 +71,8 @@ function KeyField({ w, board, onKey }: { w: Widget; board: Board; onKey: (code: 
     w.type === "footswitch"
       ? "Press it to stomp the switch."
       : w.type === "selector"
-        ? "Tap it for the next position, or hold it and use ↑ / ↓."
-        : "Hold it and use ↑ / ↓ to turn (⇧ for bigger steps).";
+        ? "Press it to select this control, then ↑ / ↓ step through positions. Press it again (or Esc) to let go."
+        : "Press it to select this control, then ↑ / ↓ turn it (⇧ for bigger steps). Press it again (or Esc) to let go.";
 
   return (
     <div className="insp-field">

@@ -80,9 +80,10 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
   make inside the plugin's own window.
 - **Keyboard keys:** select a footswitch, knob, fader or selector and use
   *Keyboard key* to give it a key. In play mode a switch's key stomps it (momentary
-  switches are held while the key is down). For a knob or fader, hold its key and
-  press ↑ / ↓ to turn it (⇧ for bigger steps); a selector's key steps to the next
-  position when tapped. Keys the app already uses (Space, arrows, 1–9, Esc, …)
+  switches are held while the key is down). A knob's, fader's or selector's key
+  selects it (it glows): then ↑ / ↓ turn it (⇧ for bigger steps) — no need to hold
+  anything. Press the key again, another control's key, or Esc to let go; while a
+  control is selected, ↑ / ↓ don't change the tempo. Keys the app already uses (Space, arrows, 1–9, Esc, …)
   can't be assigned, and a key on several controls moves them together.
 - **Stage:** playing a board shows only the board, with the tuner/metronome dock
   floating underneath. The window loses its frame and traffic lights, goes

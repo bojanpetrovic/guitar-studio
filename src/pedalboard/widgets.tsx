@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTelemetry } from "../api";
 import { usePeakLevels } from "../hooks";
 import { useStudio } from "../studio";
@@ -40,23 +40,51 @@ function useDrag(r: Resolved, editing: boolean) {
 
 type KeyMode =
   | { kind: "switch"; momentary: boolean }
-  /** Knob / fader: hold the key, ↑ / ↓ to adjust. Selector: same, and a tap steps on. */
+  /** Knob / fader / selector: its key selects it, then ↑ / ↓ adjust it. */
   | { kind: "dial"; positions?: number };
 
 /** Nudge per ↑ / ↓ press for continuous controls (⇧ for coarse). */
 const KEY_STEP = 0.01;
 const KEY_STEP_COARSE = 0.05;
 
+// The selected key: its knobs / faders / selectors take ↑ / ↓ until the key is
+// pressed again, another control's key is pressed, or Esc. It's the key that's
+// selected, not one control, so controls sharing a key move together.
+let selectedKey: string | null = null;
+let lastToggle: Event | null = null;
+const selectionListeners = new Set<() => void>();
+function selectKey(code: string | null) {
+  if (selectedKey === code) return;
+  selectedKey = code;
+  selectionListeners.forEach((l) => l());
+}
+/** Every control with the key sees the same keydown: toggle once per event. */
+function toggleKey(code: string, e: Event) {
+  if (lastToggle === e) return;
+  lastToggle = e;
+  selectKey(selectedKey === code ? null : code);
+}
+/** Drop the selection (leaving play mode, another rig). */
+export const clearKeySelection = () => selectKey(null);
+const subscribeSelection = (l: () => void) => {
+  selectionListeners.add(l);
+  return () => void selectionListeners.delete(l);
+};
+const useKeySelected = (code: string | undefined) =>
+  useSyncExternalStore(subscribeSelection, () => !!code && selectedKey === code);
+
 /**
  * Plays a control from its assigned key while the board is in play mode. Listens on
- * `document` so a held control claims ↑ / ↓ before the window-level tempo keys (they
- * skip events that are already handled). Returns whether the key is held down.
+ * `document` so a selected control claims ↑ / ↓ (and Esc) before the window-level
+ * tempo and stage keys (they skip events that are already handled). Returns whether
+ * the control is active: a switch's key held down, or a dial's key selected.
  */
 function useControlKey(w: Widget, r: Resolved, editing: boolean, mode: KeyMode) {
   const code = w.options.key;
   const latest = useRef(r);
   latest.current = r;
   const [held, setHeld] = useState(false);
+  const selected = useKeySelected(mode.kind === "dial" && !editing ? code : undefined);
   const momentary = mode.kind === "switch" && mode.momentary;
   const positions = mode.kind === "dial" ? (mode.positions ?? 0) : 0;
   const kind = mode.kind;
@@ -64,63 +92,68 @@ function useControlKey(w: Widget, r: Resolved, editing: boolean, mode: KeyMode) 
   useEffect(() => {
     if (!code || editing) return;
     let down = false;
-    let moved = false;
+    // Where ↑ / ↓ last put the value: repeats build on it rather than on a value React
+    // hasn't rendered yet. Re-read from the control once the keys have been idle.
     let norm = 0;
+    let nudgedAt = -Infinity;
 
-    const let_go = () => {
+    const letGo = () => {
       if (!down) return;
       down = false;
       setHeld(false);
-      const r = latest.current;
-      if (!r.ok) return;
-      if (kind === "switch" && momentary) r.release();
-      // A selector tapped without ↑ / ↓ steps to its next position.
-      if (positions > 1 && !moved) {
-        const i = Math.round(r.norm * (positions - 1));
-        r.setNorm(((i + 1) % positions) / (positions - 1));
-      }
+      if (kind === "switch" && momentary && latest.current.ok) latest.current.release();
     };
     const onDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       const r = latest.current;
       if (e.code === code) {
         e.preventDefault();
-        if (e.repeat || down) return;
+        if (e.repeat) return;
+        if (kind === "dial") {
+          toggleKey(code, e);
+          return;
+        }
+        if (down) return;
         down = true;
-        moved = false;
-        norm = r.norm;
         setHeld(true);
-        if (kind === "switch" && r.ok) {
+        if (r.ok) {
           if (momentary) r.press();
           else r.toggle();
         }
         return;
       }
-      if (down && kind === "dial" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (kind !== "dial" || selectedKey !== code) return;
+      if (e.key === "Escape") {
         e.preventDefault();
-        if (!r.ok) return;
-        const discrete = positions > 1 ? positions - 1 : r.steps;
-        const step = discrete > 0 ? 1 / discrete : e.shiftKey ? KEY_STEP_COARSE : KEY_STEP;
-        norm = clamp01(norm + (e.key === "ArrowUp" ? step : -step));
-        moved = true;
-        r.setNorm(norm);
+        selectKey(null);
+        return;
       }
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      if (!r.ok) return;
+      const now = performance.now();
+      if (now - nudgedAt > 400) norm = r.norm;
+      nudgedAt = now;
+      const discrete = positions > 1 ? positions - 1 : r.steps;
+      const step = discrete > 0 ? 1 / discrete : e.shiftKey ? KEY_STEP_COARSE : KEY_STEP;
+      norm = clamp01(norm + (e.key === "ArrowUp" ? step : -step));
+      r.setNorm(norm);
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.code === code) let_go();
+      if (e.code === code) letGo();
     };
     document.addEventListener("keydown", onDown);
     document.addEventListener("keyup", onUp);
-    window.addEventListener("blur", let_go);
+    window.addEventListener("blur", letGo);
     return () => {
       document.removeEventListener("keydown", onDown);
       document.removeEventListener("keyup", onUp);
-      window.removeEventListener("blur", let_go);
-      let_go();
+      window.removeEventListener("blur", letGo);
+      letGo();
     };
   }, [code, editing, kind, momentary, positions]);
 
-  return held;
+  return held || selected;
 }
 
 /** The little key badge in a control's corner. */

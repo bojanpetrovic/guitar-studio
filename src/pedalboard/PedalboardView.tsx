@@ -21,7 +21,7 @@ import { useLink } from "../transport";
 import { api, nodeName, NodeView, ParamInfo } from "../api";
 import Inspector from "./Inspector";
 import { RuntimeContext, useParamRuntime } from "./runtime";
-import { WidgetView } from "./widgets";
+import { clearKeySelection, WidgetView } from "./widgets";
 import { enterStage, exitStage } from "../stageWindow";
 import SceneBar, { SCENE_BAR_H } from "../components/SceneBar";
 import {
@@ -165,6 +165,8 @@ export default function PedalboardView() {
   const link = useLink();
   const runtime = useParamRuntime(board, studio, link === "open");
   const editing = mode === "edit";
+  // A key-selected control stays selected only while this board is being played.
+  useEffect(() => clearKeySelection, [editing, layoutKey]);
   const selected = board.widgets.find((w) => w.id === selectedId) ?? null;
 
   // A freshly loaded rig opens ready to play if it has a board, ready to design if not.
@@ -224,7 +226,7 @@ export default function PedalboardView() {
         e.preventDefault();
         setMode((m) => (m === "edit" ? "play" : "edit"));
         setSelectedId(null);
-      } else if (stage && !typing && e.key === "Escape") {
+      } else if (stage && !typing && e.key === "Escape" && !e.defaultPrevented) {
         setMode("edit");
       }
     };
