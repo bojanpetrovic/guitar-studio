@@ -234,6 +234,7 @@ mod tests {
             frames: 64,
             hw_input: &[],
             transport: Default::default(),
+            hosted: false,
         };
         let (mut l, mut r) = (vec![0.0; 64], vec![0.0; 64]);
         s.run(&ctx, [&mut l, &mut r]); // first block may ramp
@@ -269,6 +270,7 @@ mod tests {
             frames: 64,
             hw_input: &[],
             transport: Default::default(),
+            hosted: false,
         };
         let (mut l, mut r) = (vec![0.0; 64], vec![0.0; 64]);
         s.run(&ctx, [&mut l, &mut r]);

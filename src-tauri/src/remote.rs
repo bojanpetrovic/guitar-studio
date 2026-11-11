@@ -10,7 +10,7 @@
 //! Only playing commands are accepted (no rig or board editing), and the socket needs the
 //! secret token from the QR code.
 
-use crate::{AppState, err, presets};
+use crate::Desktop;
 use axum::Router;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State as AxState};
@@ -18,8 +18,8 @@ use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
+use gs_app::{changes_state, err};
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -440,90 +440,33 @@ async fn handle(ctx: &Ctx, text: &str) -> String {
     .unwrap_or_default()
 }
 
-struct Args(Value);
-
-impl Args {
-    /// A named argument (camelCase, as the frontend sends it). Missing = null, so
-    /// `Option<T>` arguments may be left out.
-    fn get<T: DeserializeOwned>(&self, name: &str) -> Result<T, String> {
-        let v = self.0.get(name).cloned().unwrap_or(Value::Null);
-        serde_json::from_value(v).map_err(|e| format!("argument `{name}`: {e}"))
-    }
-}
-
-fn to_json<T: Serialize>(v: T) -> Result<Value, String> {
-    serde_json::to_value(v).map_err(err)
-}
-
 /// The commands a phone may run: everything needed to play the board, nothing that
 /// edits the rig or the board itself.
-fn dispatch(app: &AppHandle, cmd: &str, args: Value) -> Result<Value, String> {
-    let a = Args(args);
-    let s = || app.state::<AppState>();
-    match cmd {
-        "remote_sync" => to_json(crate::remote_sync(s())),
-        "get_studio" => to_json(crate::get_studio(s())),
-        "list_presets" => to_json(presets::list_presets(s())),
-        "preset_ready" => to_json(crate::preset_is_ready(
-            &s(),
-            a.get::<String>("name")?.as_str(),
-        )),
-        "load_preset" => to_json(presets::load_preset(app.clone(), s(), a.get("name")?)?),
-        "plugin_params" => to_json(crate::plugin_params(s(), a.get("id")?)?),
-        "get_param_values" => to_json(crate::get_param_values(s(), a.get("items")?)),
-        "set_plugin_param" => to_json(crate::set_plugin_param(
-            s(),
-            a.get("id")?,
-            a.get("paramId")?,
-            a.get("value")?,
-        )?),
-        "set_bypass" => to_json(crate::set_bypass(s(), a.get("id")?, a.get("bypass")?)?),
-        "set_node_param" => to_json(crate::set_node_param(
-            s(),
-            a.get("id")?,
-            a.get("param")?,
-            a.get("value")?,
-        )?),
-        "set_mixer_strip" => to_json(crate::set_mixer_strip(
-            s(),
-            a.get("id")?,
-            a.get("source")?,
-            a.get("field")?,
-            a.get("value")?,
-        )?),
-        "set_metronome" => {
-            crate::set_metronome(s(), a.get("settings")?);
-            Ok(Value::Null)
-        }
-        "set_tuner" => {
-            crate::set_tuner(s(), a.get("enabled")?, a.get("referenceA4")?);
-            Ok(Value::Null)
-        }
-        "select_scene" => to_json(crate::select_scene(s(), a.get("index")?)?),
-        "add_scene" => to_json(crate::add_scene(s(), a.get("name")?)?),
-        "rename_scene" => to_json(crate::rename_scene(s(), a.get("index")?, a.get("name")?)?),
-        "delete_scene" => to_json(crate::delete_scene(s(), a.get("index")?)?),
-        _ => Err(format!("“{cmd}” isn't available from the phone")),
-    }
-}
+const PHONE_COMMANDS: &[&str] = &[
+    "remote_sync",
+    "get_studio",
+    "list_presets",
+    "preset_ready",
+    "load_preset",
+    "plugin_params",
+    "get_param_values",
+    "set_plugin_param",
+    "set_bypass",
+    "set_node_param",
+    "set_mixer_strip",
+    "set_metronome",
+    "set_tuner",
+    "select_scene",
+    "add_scene",
+    "rename_scene",
+    "delete_scene",
+];
 
-/// Whether a command can change what `remote_sync` returns (so the other side needs
-/// telling). Plugin parameters aren't in it: boards poll those.
-pub fn changes_state(cmd: &str) -> bool {
-    !(cmd.starts_with("get_")
-        || cmd.starts_with("list_")
-        || cmd.starts_with("remote_")
-        || matches!(
-            cmd,
-            "plugin_params"
-                | "preset_ready"
-                | "set_plugin_param"
-                | "open_editor"
-                | "set_window_buttons"
-                | "scan_plugins"
-                | "set_remote"
-                | "renew_remote_link"
-        ))
+fn dispatch(app: &AppHandle, cmd: &str, args: Value) -> Result<Value, String> {
+    if !PHONE_COMMANDS.contains(&cmd) {
+        return Err(format!("“{cmd}” isn't available from the phone"));
+    }
+    gs_app::dispatch(&app.state::<Desktop>().app, cmd, args)
 }
 
 // ---------------------------------------------------------------- helpers
@@ -594,17 +537,6 @@ fn new_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_state_changing_commands_notify() {
-        assert!(changes_state("select_scene"));
-        assert!(changes_state("set_mixer_strip"));
-        assert!(changes_state("load_preset"));
-        assert!(!changes_state("get_param_values"));
-        assert!(!changes_state("set_plugin_param"));
-        assert!(!changes_state("remote_sync"));
-        assert!(!changes_state("preset_ready"));
-    }
 
     #[test]
     fn tokens_are_random_hex() {

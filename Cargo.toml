@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/gs-engine", "src-tauri"]
+members = ["crates/gs-engine", "crates/gs-app", "crates/gs-plugin", "src-tauri"]
+# The plugin (and its C++ VST3 shim) builds only when asked: `make plugin`.
+default-members = ["crates/gs-engine", "crates/gs-app", "src-tauri"]
 
 [workspace.package]
 edition = "2024"

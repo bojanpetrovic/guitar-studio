@@ -2356,6 +2356,14 @@ select {
 .app.stage-mode {
   background: transparent;
 }
+/* A plugin window can't be see-through: the board sits on the theme's background. */
+:root.plugin.stage-mode,
+:root.plugin.stage-mode body {
+  background: var(--bg);
+}
+:root.plugin .titlebar {
+  padding-left: 14px;
+}
 .app.stage-mode {
   grid-template-columns: 1fr;
   grid-template-rows: 1fr auto;

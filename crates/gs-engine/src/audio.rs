@@ -194,27 +194,58 @@ pub struct AudioShared {
     pub tuner_channel: Arc<AtomicU32>,
 }
 
-/// A running pair of streams plus the control-side ends of their queues.
+/// The control-side ends of a running audio engine's queues: either our own device
+/// streams, or a plugin host driving [`HostedAudio`].
 pub struct RunningAudio {
-    _input: cpal::Stream,
-    _output: cpal::Stream,
+    /// The device streams (none when a plugin host drives the audio).
+    _streams: Option<(cpal::Stream, cpal::Stream)>,
     commands: rtrb::Producer<Command>,
     garbage: rtrb::Consumer<Box<Schedule>>,
+    /// The newest schedule, while the queue is full: a plugin host may stop calling us
+    /// for a while (a paused track), and only the latest graph matters then.
+    waiting: Option<Box<Schedule>>,
     pub status: AudioStatus,
 }
 
 impl RunningAudio {
-    pub fn send_schedule(&mut self, schedule: Schedule) -> Result<()> {
-        self.commands
-            .push(Command::SetSchedule(Box::new(schedule)))
-            .map_err(|_| anyhow!("audio command queue full"))
+    fn new(
+        streams: Option<(cpal::Stream, cpal::Stream)>,
+        commands: rtrb::Producer<Command>,
+        garbage: rtrb::Consumer<Box<Schedule>>,
+        status: AudioStatus,
+    ) -> Self {
+        Self {
+            _streams: streams,
+            commands,
+            garbage,
+            waiting: None,
+            status,
+        }
     }
 
-    /// Free schedules the audio thread has retired. Call regularly from a non-RT thread.
+    /// Hand a new graph to the audio thread (or keep it until there's room).
+    pub fn send_schedule(&mut self, schedule: Schedule) -> Result<()> {
+        self.waiting = Some(Box::new(schedule));
+        self.flush();
+        Ok(())
+    }
+
+    fn flush(&mut self) {
+        if let Some(schedule) = self.waiting.take()
+            && let Err(rtrb::PushError::Full(Command::SetSchedule(schedule))) =
+                self.commands.push(Command::SetSchedule(schedule))
+        {
+            self.waiting = Some(schedule);
+        }
+    }
+
+    /// Free schedules the audio thread has retired, and pass on one that was waiting.
+    /// Call regularly from a non-RT thread.
     pub fn collect_garbage(&mut self) {
         while let Ok(old) = self.garbage.pop() {
             drop(old);
         }
+        self.flush();
     }
 }
 
@@ -263,8 +294,14 @@ pub fn start(
 
     let ring_len = in_channels as usize * MAX_BLOCK * 8;
     let (mut in_tx, in_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
-    let (cmd_tx, cmd_rx) = rtrb::RingBuffer::<Command>::new(64);
-    let (garbage_tx, garbage_rx) = rtrb::RingBuffer::<Box<Schedule>>::new(64);
+    let (core, commands, garbage) = Core::new(
+        initial,
+        shared,
+        tuner_tx,
+        sample_rate as f32,
+        in_channels as usize,
+        false,
+    );
 
     let input = in_dev
         .build_input_stream::<f32, _, _>(
@@ -280,24 +317,13 @@ pub fn start(
         )
         .context("opening input stream (is microphone access allowed?)")?;
 
-    let mut rt = Rt {
-        schedule: Box::new(initial),
-        commands: cmd_rx,
-        garbage: garbage_tx,
+    let mut rt = DeviceRt {
+        core,
         input: in_rx,
         in_channels: in_channels as usize,
         out_channels: out_channels as usize,
-        hw_in: vec![vec![0.0; MAX_BLOCK]; in_channels as usize],
         interleaved: vec![0.0; MAX_BLOCK * in_channels as usize],
-        master: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
-        click: vec![0.0; MAX_BLOCK],
-        metronome: Metronome::default(),
-        shared,
-        tuner_tx,
-        sample_rate: sample_rate as f32,
         max_queue_frames: effective_buffer as usize * 2,
-        song_samples: 0,
-        song_beats: 0.0,
     };
     let output = out_dev
         .build_output_stream::<f32, _, _>(
@@ -312,12 +338,11 @@ pub fn start(
     output.play().context("starting output")?;
 
     let latency_ms = 3.0 * effective_buffer as f32 / sample_rate as f32 * 1000.0;
-    Ok(RunningAudio {
-        _input: input,
-        _output: output,
-        commands: cmd_tx,
-        garbage: garbage_rx,
-        status: AudioStatus {
+    Ok(RunningAudio::new(
+        Some((input, output)),
+        commands,
+        garbage,
+        AudioStatus {
             running: true,
             input_device: in_dev.to_string(),
             output_device: out_dev.to_string(),
@@ -327,33 +352,154 @@ pub fn start(
             buffer_size: effective_buffer,
             latency_ms,
         },
-    })
+    ))
 }
 
-/// Audio-thread state, owned by the output callback.
-struct Rt {
+/// Audio driven by a plugin host (Guitar Studio running as a plugin): the host calls
+/// [`HostedAudio::process`] from its audio thread with its own buffers.
+pub struct HostedAudio {
+    core: Core,
+}
+
+/// Name shown for the "device" when a plugin host drives the audio.
+pub const HOST_DEVICE: &str = "Plugin host";
+
+/// Set up host-driven audio: the returned [`RunningAudio`] is the control side, the
+/// [`HostedAudio`] goes to the host's audio thread.
+pub fn hosted(
+    shared: AudioShared,
+    initial: Schedule,
+    tuner_tx: rtrb::Producer<f32>,
+    sample_rate: u32,
+    channels: u16,
+    max_block: u32,
+) -> (RunningAudio, HostedAudio) {
+    let (core, commands, garbage) = Core::new(
+        initial,
+        shared,
+        tuner_tx,
+        sample_rate as f32,
+        channels as usize,
+        true,
+    );
+    let running = RunningAudio::new(
+        None,
+        commands,
+        garbage,
+        AudioStatus {
+            running: true,
+            input_device: HOST_DEVICE.into(),
+            output_device: HOST_DEVICE.into(),
+            input_channels: channels,
+            output_channels: channels,
+            sample_rate,
+            buffer_size: max_block,
+            latency_ms: 0.0,
+        },
+    );
+    (running, HostedAudio { core })
+}
+
+impl HostedAudio {
+    /// Process one host block: `inputs` are the host's input channels, `outputs` its
+    /// output channels (all `frames` long). `transport` is the host's, if it has one;
+    /// otherwise the metronome's tempo is passed to plugins.
+    pub fn process(
+        &mut self,
+        inputs: &[&[f32]],
+        outputs: &mut [&mut [f32]],
+        frames: usize,
+        transport: Option<&TransportInfo>,
+    ) {
+        let started = Instant::now();
+        let core = &mut self.core;
+        core.take_commands();
+        let mut offset = 0;
+        while offset < frames {
+            let n = (frames - offset).min(MAX_BLOCK);
+            for (c, dst) in core.hw_in.iter_mut().enumerate() {
+                match inputs.get(c).or(inputs.first()) {
+                    Some(src) => dst[..n].copy_from_slice(&src[offset..offset + n]),
+                    None => dst[..n].fill(0.0),
+                }
+            }
+            core.tap_tuner(n);
+            core.run_block(n, transport);
+            // A DAW mixes in float, so leave headroom; only stop what would wreck the
+            // session (NaN / infinity from a misbehaving plugin).
+            let safe = |s: f32| {
+                if s.is_finite() {
+                    s.clamp(-8.0, 8.0)
+                } else {
+                    0.0
+                }
+            };
+            let [l, r] = &core.master;
+            let mono = outputs.len() == 1;
+            for (c, out) in outputs.iter_mut().enumerate() {
+                for (f, o) in out[offset..offset + n].iter_mut().enumerate() {
+                    *o = safe(match (mono, c % 2) {
+                        (true, _) => 0.5 * (l[f] + r[f]),
+                        (false, 0) => l[f],
+                        _ => r[f],
+                    });
+                }
+            }
+            offset += n;
+        }
+        core.measure_load(started, frames);
+    }
+}
+
+/// The engine itself, shared by both ways of driving audio: runs the schedule over
+/// `hw_in` into `master`, adds the click, and keeps meters and the song position.
+struct Core {
     schedule: Box<Schedule>,
     commands: rtrb::Consumer<Command>,
     garbage: rtrb::Producer<Box<Schedule>>,
-    input: rtrb::Consumer<f32>,
-    in_channels: usize,
-    out_channels: usize,
     hw_in: Vec<Vec<f32>>,
-    interleaved: Vec<f32>,
     master: [Vec<f32>; 2],
     click: Vec<f32>,
     metronome: Metronome,
     shared: AudioShared,
     tuner_tx: rtrb::Producer<f32>,
     sample_rate: f32,
-    max_queue_frames: usize,
     song_samples: i64,
     song_beats: f64,
+    /// Driven by a plugin host (see `ProcessCtx::hosted`).
+    hosted: bool,
 }
 
-impl Rt {
-    fn process(&mut self, data: &mut [f32]) {
-        let started = Instant::now();
+impl Core {
+    fn new(
+        initial: Schedule,
+        shared: AudioShared,
+        tuner_tx: rtrb::Producer<f32>,
+        sample_rate: f32,
+        in_channels: usize,
+        hosted: bool,
+    ) -> (Self, rtrb::Producer<Command>, rtrb::Consumer<Box<Schedule>>) {
+        let (cmd_tx, cmd_rx) = rtrb::RingBuffer::<Command>::new(64);
+        let (garbage_tx, garbage_rx) = rtrb::RingBuffer::<Box<Schedule>>::new(64);
+        let core = Self {
+            schedule: Box::new(initial),
+            commands: cmd_rx,
+            garbage: garbage_tx,
+            hw_in: vec![vec![0.0; MAX_BLOCK]; in_channels.max(1)],
+            master: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
+            click: vec![0.0; MAX_BLOCK],
+            metronome: Metronome::default(),
+            shared,
+            tuner_tx,
+            sample_rate,
+            song_samples: 0,
+            song_beats: 0.0,
+            hosted,
+        };
+        (core, cmd_tx, garbage_rx)
+    }
+
+    fn take_commands(&mut self) {
         while let Ok(cmd) = self.commands.pop() {
             match cmd {
                 Command::SetSchedule(s) => {
@@ -365,27 +511,99 @@ impl Rt {
                 }
             }
         }
+    }
 
+    fn measure_load(&self, started: Instant, frames: usize) {
+        let period = frames as f32 / self.sample_rate;
+        if period > 0.0 {
+            let load = started.elapsed().as_secs_f32() / period;
+            let t = &self.shared.telemetry.cpu_load;
+            t.store(t.load() * 0.9 + load * 0.1);
+        }
+    }
+
+    fn tap_tuner(&mut self, n: usize) {
+        if !self.shared.tuner_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let c = (self.shared.tuner_channel.load(Ordering::Relaxed) as usize)
+            .min(self.hw_in.len().saturating_sub(1));
+        let Some(src) = self.hw_in.get(c) else { return };
+        let k = n.min(self.tuner_tx.slots());
+        if let Ok(chunk) = self.tuner_tx.write_chunk_uninit(k) {
+            chunk.fill_from_iter(src[..k].iter().copied());
+        }
+    }
+
+    /// `host`: the plugin host's transport, passed on to plugins as is.
+    fn run_block(&mut self, n: usize, host: Option<&TransportInfo>) {
+        let met = &self.shared.metronome;
+        let bpm = met.bpm.load().max(1.0) as f64;
+        let transport = host.cloned().unwrap_or(TransportInfo {
+            tempo_bpm: Some(bpm),
+            time_signature: Some((met.beats_per_bar.load(Ordering::Relaxed), 4)),
+            song_position_beats: Some(self.song_beats),
+            song_position_samples: Some(self.song_samples),
+            bar_start_beats: None,
+            playing: true,
+            recording: false,
+            loop_active: false,
+        });
+        let ctx = ProcessCtx {
+            sample_rate: self.sample_rate,
+            frames: n,
+            hw_input: &self.hw_in,
+            transport,
+            hosted: self.hosted,
+        };
+        let [ml, mr] = &mut self.master;
+        self.schedule.run(&ctx, [&mut ml[..n], &mut mr[..n]]);
+
+        let click = &mut self.click[..n];
+        click.fill(0.0);
+        self.metronome.process(met, self.sample_rate, click);
+        for i in 0..n {
+            ml[i] += click[i];
+            mr[i] += click[i];
+        }
+
+        self.song_samples += n as i64;
+        self.song_beats += n as f64 / (self.sample_rate as f64 * 60.0 / bpm);
+        let tel = &self.shared.telemetry;
+        tel.output_peak[0].raise_to(peak(&ml[..n]));
+        tel.output_peak[1].raise_to(peak(&mr[..n]));
+    }
+}
+
+/// Our own device streams: cpal's input callback fills a ring that the output
+/// callback drains into the engine.
+struct DeviceRt {
+    core: Core,
+    input: rtrb::Consumer<f32>,
+    in_channels: usize,
+    out_channels: usize,
+    interleaved: Vec<f32>,
+    max_queue_frames: usize,
+}
+
+impl DeviceRt {
+    fn process(&mut self, data: &mut [f32]) {
+        let started = Instant::now();
+        self.core.take_commands();
         let total_frames = data.len() / self.out_channels.max(1);
         let mut offset = 0;
         while offset < total_frames {
             let n = (total_frames - offset).min(MAX_BLOCK);
             self.read_input(n);
-            self.tap_tuner(n);
-            self.run_block(n);
+            self.core.tap_tuner(n);
+            self.core.run_block(n, None);
             self.write_output(
                 &mut data[offset * self.out_channels..(offset + n) * self.out_channels],
                 n,
             );
             offset += n;
         }
-
-        let period = total_frames as f32 / self.sample_rate;
-        if period > 0.0 {
-            let load = started.elapsed().as_secs_f32() / period;
-            let t = &self.shared.telemetry.cpu_load;
-            t.store(t.load() * 0.9 + load * 0.1);
-        }
+        self.core.measure_load(started, total_frames);
     }
 
     fn read_input(&mut self, n: usize) {
@@ -410,72 +628,23 @@ impl Rt {
         }
         if have < want {
             buf[have..].fill(0.0);
-            self.shared
+            self.core
+                .shared
                 .telemetry
                 .underruns
                 .fetch_add(1, Ordering::Relaxed);
         }
         for c in 0..ch {
-            let dst = &mut self.hw_in[c][..n];
+            let dst = &mut self.core.hw_in[c][..n];
             for (f, d) in dst.iter_mut().enumerate() {
                 *d = buf[f * ch + c];
             }
         }
     }
 
-    fn tap_tuner(&mut self, n: usize) {
-        if !self.shared.tuner_enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        let c = (self.shared.tuner_channel.load(Ordering::Relaxed) as usize)
-            .min(self.in_channels.saturating_sub(1));
-        let Some(src) = self.hw_in.get(c) else { return };
-        let k = n.min(self.tuner_tx.slots());
-        if let Ok(chunk) = self.tuner_tx.write_chunk_uninit(k) {
-            chunk.fill_from_iter(src[..k].iter().copied());
-        }
-    }
-
-    fn run_block(&mut self, n: usize) {
-        let met = &self.shared.metronome;
-        let bpm = met.bpm.load().max(1.0) as f64;
-        let transport = TransportInfo {
-            tempo_bpm: Some(bpm),
-            time_signature: Some((met.beats_per_bar.load(Ordering::Relaxed), 4)),
-            song_position_beats: Some(self.song_beats),
-            song_position_samples: Some(self.song_samples),
-            bar_start_beats: None,
-            playing: true,
-            recording: false,
-            loop_active: false,
-        };
-        let ctx = ProcessCtx {
-            sample_rate: self.sample_rate,
-            frames: n,
-            hw_input: &self.hw_in,
-            transport,
-        };
-        let [ml, mr] = &mut self.master;
-        self.schedule.run(&ctx, [&mut ml[..n], &mut mr[..n]]);
-
-        let click = &mut self.click[..n];
-        click.fill(0.0);
-        self.metronome.process(met, self.sample_rate, click);
-        for i in 0..n {
-            ml[i] += click[i];
-            mr[i] += click[i];
-        }
-
-        self.song_samples += n as i64;
-        self.song_beats += n as f64 / (self.sample_rate as f64 * 60.0 / bpm);
-        let tel = &self.shared.telemetry;
-        tel.output_peak[0].raise_to(peak(&ml[..n]));
-        tel.output_peak[1].raise_to(peak(&mr[..n]));
-    }
-
     fn write_output(&mut self, out: &mut [f32], n: usize) {
         let ch = self.out_channels;
-        let [l, r] = &self.master;
+        let [l, r] = &self.core.master;
         for f in 0..n {
             let frame = &mut out[f * ch..(f + 1) * ch];
             // Hard safety clip so a runaway plugin can't blast the speakers (NaN, which
@@ -497,5 +666,50 @@ impl Rt {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared() -> AudioShared {
+        AudioShared {
+            telemetry: Arc::default(),
+            metronome: Arc::default(),
+            tuner_enabled: Arc::default(),
+            tuner_channel: Arc::default(),
+        }
+    }
+
+    /// A plugin host may stop calling us (a paused track) while the graph is edited:
+    /// sending must keep working, and the newest graph arrives once audio resumes.
+    #[test]
+    fn graph_edits_while_the_host_is_paused_are_kept() {
+        let (tuner_tx, _tuner_rx) = rtrb::RingBuffer::new(16);
+        let (mut running, mut hosted) =
+            hosted(shared(), Schedule::empty(), tuner_tx, 48_000, 2, 64);
+        for _ in 0..200 {
+            running.send_schedule(Schedule::empty()).unwrap();
+        }
+        assert!(running.waiting.is_some(), "the newest graph waits for room");
+        let input = vec![0.25f32; 64];
+        let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
+        hosted.process(&[&input, &input], &mut [&mut l, &mut r], 64, None);
+        running.collect_garbage();
+        assert!(
+            running.waiting.is_none(),
+            "it was handed over once the queue drained"
+        );
+    }
+
+    #[test]
+    fn hosted_output_is_finite_and_mono_folds() {
+        let (tuner_tx, _tuner_rx) = rtrb::RingBuffer::new(16);
+        let (_running, mut hosted) = hosted(shared(), Schedule::empty(), tuner_tx, 48_000, 2, 64);
+        let input = vec![f32::NAN; 64];
+        let mut mono = vec![1.0f32; 64];
+        hosted.process(&[&input], &mut [&mut mono], 64, None);
+        assert!(mono.iter().all(|s| s.is_finite()));
     }
 }

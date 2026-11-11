@@ -12,22 +12,20 @@
 //!
 //! Spares are capped at what those two neighbours need, so memory stays bounded.
 
-use crate::{AppState, RigGuard};
+use crate::{App, RigGuard, main_thread};
 use gs_engine::nodes::MAX_BLOCK;
 use gs_engine::plugins::{self, PluginDescriptor, SharedPlugin};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
 
 /// Let a switch settle (and the user start playing) before preloading.
 const SETTLE: Duration = Duration::from_millis(1500);
 /// Breathing room between two preloads: each blocks the main thread while it starts.
 const GAP: Duration = Duration::from_millis(300);
 
-#[derive(Default)]
 pub struct Warm {
     spares: Mutex<Vec<SharedPlugin>>,
     /// Bumped by every refresh; a preload run stops when it's no longer the latest.
@@ -35,9 +33,29 @@ pub struct Warm {
     /// Held while a plugin preloads off the main thread, with its key in `in_flight`.
     loading: Mutex<()>,
     in_flight: Mutex<Option<String>>,
+    /// Preloading is on. Inside a plugin host it waits until the user switches presets
+    /// in the plugin window: a DAW project restores one rig per track, and each would
+    /// otherwise quietly start its neighbours' plugins too.
+    armed: AtomicBool,
 }
 
 impl Warm {
+    /// `armed`: preload from the start (the desktop app) or only after [`Warm::arm`].
+    pub fn new(armed: bool) -> Self {
+        Self {
+            spares: Mutex::default(),
+            generation: AtomicU64::default(),
+            loading: Mutex::default(),
+            in_flight: Mutex::default(),
+            armed: AtomicBool::new(armed),
+        }
+    }
+
+    /// Start preloading neighbours (the user is switching presets).
+    pub fn arm(&self) {
+        self.armed.store(true, Ordering::Relaxed);
+    }
+
     /// All spares, for a rig switch to pick from.
     pub fn take(&self) -> Vec<SharedPlugin> {
         std::mem::take(&mut *self.spares.lock())
@@ -59,13 +77,18 @@ impl Warm {
     }
 
     /// Release every spare (e.g. the sample rate changed: they'd run at the old one).
-    pub fn clear(&self, state: &AppState) {
-        state.graveyard.lock().extend(self.take());
+    pub fn clear(&self, app: &App) {
+        app.bury(self.take());
+    }
+
+    /// Stop any preloading (the app is shutting down).
+    pub fn stop(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Can `plugins` be set up without starting any plugin (all running or spare)?
-    pub fn covers(&self, state: &AppState, plugins: &[PluginDescriptor]) -> bool {
-        let mut have = counts(state.studio.lock().plugin_instances().iter());
+    pub fn covers(&self, app: &App, plugins: &[PluginDescriptor]) -> bool {
+        let mut have = counts(app.studio.lock().plugin_instances().iter());
         for (k, n) in counts(self.spares.lock().iter()) {
             *have.entry(k).or_default() += n;
         }
@@ -106,15 +129,18 @@ fn neighbours(names: &[String], current: Option<&str>) -> Vec<String> {
 
 /// After a switch (or a change to the preset list): drop spares nobody nearby needs and
 /// preload what the neighbours will need, in the background.
-pub fn refresh(app: &AppHandle) {
-    let warm = &app.state::<AppState>().warm;
-    let generation = warm.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let app = app.clone();
+pub fn refresh(app: &Arc<App>) {
+    let generation = app.warm.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    if !app.warm.armed.load(Ordering::Relaxed) {
+        return;
+    }
+    let app = Arc::downgrade(app);
     let spawned = std::thread::Builder::new()
         .name("gs-warm".into())
         .spawn(move || {
             std::thread::sleep(SETTLE);
-            let state = app.state::<AppState>();
+            // The plugin host may have unloaded us meanwhile.
+            let Some(state) = app.upgrade() else { return };
             let latest = || state.warm.generation.load(Ordering::SeqCst) == generation;
             if !latest() {
                 return;
@@ -161,7 +187,7 @@ pub fn refresh(app: &AppHandle) {
                     }
                     keep
                 });
-                state.graveyard.lock().extend(released);
+                state.bury(released);
                 for (key, (n, d)) in &wanted {
                     let have = kept.get(key).copied().unwrap_or(0);
                     missing.extend(std::iter::repeat_n(d.clone(), n.saturating_sub(have)));
@@ -174,7 +200,7 @@ pub fn refresh(app: &AppHandle) {
                 if !latest() {
                     break;
                 }
-                let _ = app.emit("warming", Some(&desc.name));
+                state.emit("warming", &Some(&desc.name));
                 if plugins::loads_off_main_thread(&desc) {
                     // Right here, off the main thread: the UI stays responsive however
                     // long it takes (Archetype Cory Wong: ~12 s).
@@ -184,6 +210,9 @@ pub fn refresh(app: &AppHandle) {
                     let loaded = plugins::load_plugin(&desc, rate, MAX_BLOCK);
                     *state.warm.in_flight.lock() = None;
                     match loaded {
+                        // Shut down meanwhile? Then nobody will take it: release it on
+                        // the main thread, like every plugin.
+                        Ok(slot) if !latest() => main_thread::run(move || drop(slot)),
                         Ok(slot) => state.warm.spares.lock().push(Arc::new(Mutex::new(slot))),
                         Err(e) => log::warn!("preloading {} failed: {e:#}", desc.name),
                     }
@@ -192,29 +221,23 @@ pub fn refresh(app: &AppHandle) {
                 }
                 // VST3 / CLAP must start on the main thread (the window pauses meanwhile).
                 std::thread::sleep(Duration::from_millis(80)); // let the UI show the chip first
-                let (done, wait) = std::sync::mpsc::channel();
-                let main = app.clone();
-                let ran = app.run_on_main_thread(move || {
-                    let state = main.state::<AppState>();
+                let main = state.clone();
+                let ran = main_thread::run_and_wait(move || {
                     // Not in the middle of a rig change (a plugin pumping the run loop
                     // while it starts can run us nested); the next refresh catches up.
-                    let Ok(_busy) = RigGuard::take() else {
-                        let _ = done.send(());
-                        return;
-                    };
-                    let rate = state.studio.lock().sample_rate();
+                    let Ok(_busy) = RigGuard::take() else { return };
+                    let rate = main.studio.lock().sample_rate();
                     match plugins::load_plugin(&desc, rate, MAX_BLOCK) {
-                        Ok(slot) => state.warm.spares.lock().push(Arc::new(Mutex::new(slot))),
+                        Ok(slot) => main.warm.spares.lock().push(Arc::new(Mutex::new(slot))),
                         Err(e) => log::warn!("preloading {} failed: {e:#}", desc.name),
                     }
-                    let _ = done.send(());
                 });
-                if ran.is_err() || wait.recv().is_err() {
+                if ran.is_none() {
                     break;
                 }
                 std::thread::sleep(GAP);
             }
-            let _ = app.emit("warming", None::<String>);
+            state.emit("warming", &None::<String>);
         });
     if let Err(e) = spawned {
         log::warn!("couldn't start the preload thread: {e}");

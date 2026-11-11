@@ -20,6 +20,11 @@ pub struct ProcessCtx<'a> {
     /// De-interleaved hardware input, one Vec per device channel (len >= frames).
     pub hw_input: &'a [Vec<f32>],
     pub transport: TransportInfo,
+    /// Inside a plugin host: an Input node set to a channel the host doesn't have reads
+    /// the first one instead (the DAW track's input *is* the guitar, whichever interface
+    /// channel the rig was set up with). On our own devices that stays silent: it may be
+    /// a laptop mic next to the speakers.
+    pub hosted: bool,
 }
 
 pub trait Processor: Send {
@@ -89,7 +94,8 @@ impl Processor for InputNode {
     fn process(&mut self, ctx: &ProcessCtx, _input: [&[f32]; 2], output: [&mut [f32]; 2]) {
         let n = ctx.frames;
         let ch = self.shared.channel.load(Ordering::Relaxed) as usize;
-        match ctx.hw_input.get(ch) {
+        let src = ctx.hw_input.get(ch);
+        match src.or(ctx.hw_input.first().filter(|_| ctx.hosted)) {
             Some(src) => {
                 let src = &src[..n];
                 apply_gain(&mut self.gain, self.shared.gain.load(), [src, src], output);
@@ -313,6 +319,7 @@ mod tests {
             frames: 64,
             hw_input: &[],
             transport: Default::default(),
+            hosted: false,
         };
         let input = vec![1.0f32; 64];
         let (mut l, mut r) = (vec![0.0; 64], vec![0.0; 64]);

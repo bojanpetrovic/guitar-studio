@@ -1,0 +1,24 @@
+[package]
+name = "gs-app"
+description = "Guitar Studio's app layer (state, commands, presets, editors), shared by the desktop app and the plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gs-engine = { path = "../gs-engine" }
+truce-rack = { version = "1.1.5", features = ["au", "au3"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.13"
+log = { version = "0.4", features = ["std"] }
+anyhow = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSGraphics", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDate", "NSGeometry", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }

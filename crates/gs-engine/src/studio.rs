@@ -1,6 +1,8 @@
 //! Control-thread facade: the editable graph, plugin instances, audio lifecycle.
 
-use crate::audio::{self, AudioConfig, AudioShared, AudioStatus, RunningAudio, Telemetry};
+use crate::audio::{
+    self, AudioConfig, AudioShared, AudioStatus, HostedAudio, RunningAudio, Telemetry,
+};
 use crate::graph::{MixerChannel, NodeId, Schedule, Step, topo_order};
 use crate::metronome::{MetronomeSettings, MetronomeShared};
 use crate::nodes::{GainNode, InputNode, MAX_BLOCK, NodeShared, PluginNode, Processor};
@@ -196,36 +198,79 @@ impl Studio {
         self.audio_config = config;
 
         let (tuner_tx, tuner_rx) = rtrb::RingBuffer::<f32>::new(48_000);
-        let shared = AudioShared {
-            telemetry: self.telemetry.clone(),
-            metronome: self.metronome.clone(),
-            tuner_enabled: self.tuner_enabled.clone(),
-            tuner_channel: self.tuner_channel.clone(),
-        };
-        let result = audio::start(&self.audio_config, shared, Schedule::empty(), tuner_tx);
-        match result {
+        match audio::start(
+            &self.audio_config,
+            self.audio_shared(),
+            Schedule::empty(),
+            tuner_tx,
+        ) {
             Ok(running) => {
-                let rate = running.status.sample_rate as f64;
-                if (rate - self.sample_rate).abs() > 0.5 {
-                    self.sample_rate = rate;
-                    for node in self.nodes.values() {
-                        if let Some(p) = &node.plugin
-                            && let Err(e) = plugins::reactivate(&mut p.lock(), rate, MAX_BLOCK)
-                        {
-                            log::warn!("re-activating plugin failed: {e:#}");
-                        }
-                    }
-                }
-                self._tuner_thread = Some(tuner::spawn(self.tuner.clone(), tuner_rx, rate as f32));
-                self.audio = Some(running);
                 self.audio_error = None;
-                self.rebuild()
+                self.run_audio(running, tuner_rx)
             }
             Err(e) => {
                 self.audio_error = Some(format!("{e:#}"));
                 Err(e)
             }
         }
+    }
+
+    /// Run inside a plugin host instead of on our own devices: the host's audio thread
+    /// drives the returned [`HostedAudio`]. Call again when the host changes the rate.
+    pub fn start_hosted(
+        &mut self,
+        sample_rate: u32,
+        channels: u16,
+        max_block: u32,
+    ) -> Result<HostedAudio> {
+        self.audio = None;
+        self._tuner_thread = None;
+        self.audio_error = None;
+        let (tuner_tx, tuner_rx) = rtrb::RingBuffer::<f32>::new(48_000);
+        let (running, hosted) = audio::hosted(
+            self.audio_shared(),
+            Schedule::empty(),
+            tuner_tx,
+            sample_rate,
+            channels,
+            max_block,
+        );
+        self.run_audio(running, tuner_rx)?;
+        Ok(hosted)
+    }
+
+    fn audio_shared(&self) -> AudioShared {
+        AudioShared {
+            telemetry: self.telemetry.clone(),
+            metronome: self.metronome.clone(),
+            tuner_enabled: self.tuner_enabled.clone(),
+            tuner_channel: self.tuner_channel.clone(),
+        }
+    }
+
+    /// Adopt freshly started audio: follow its sample rate, start the tuner, and send
+    /// the graph.
+    fn run_audio(&mut self, running: RunningAudio, tuner_rx: rtrb::Consumer<f32>) -> Result<()> {
+        let rate = running.status.sample_rate as f64;
+        if (rate - self.sample_rate).abs() > 0.5 {
+            self.sample_rate = rate;
+            for node in self.nodes.values() {
+                if let Some(p) = &node.plugin
+                    && let Err(e) = plugins::reactivate(&mut p.lock(), rate, MAX_BLOCK)
+                {
+                    log::warn!("re-activating plugin failed: {e:#}");
+                }
+            }
+        }
+        self._tuner_thread = Some(tuner::spawn(self.tuner.clone(), tuner_rx, rate as f32));
+        self.audio = Some(running);
+        self.rebuild()
+    }
+
+    /// Stop audio (the plugin host deactivated us).
+    pub fn stop_audio(&mut self) {
+        self.audio = None;
+        self._tuner_thread = None;
     }
 
     /// Free retired schedules. Call periodically from a non-RT thread.

@@ -20,6 +20,7 @@ import StudioNode from "./StudioNode";
 import SceneBar from "./SceneBar";
 import SignalEdge from "./SignalEdge";
 import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "../dnd";
+import { IS_PLUGIN } from "../transport";
 
 export type StudioFlowNode = Node<{ node: NodeView }, "studio">;
 
@@ -150,7 +151,7 @@ export default function GraphCanvas() {
 
   return (
     <div className="canvas" onDragOver={onDragOver} onDrop={onDrop}>
-      {!studio.audio && (
+      {!studio.audio && !IS_PLUGIN && (
         <div className="banner">
           <AlertTriangle size={16} />
           <span>Audio is not running{studio.audioError ? `: ${studio.audioError}` : "."}</span>

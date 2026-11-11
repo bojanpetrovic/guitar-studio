@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Cpu, LayoutDashboard, Loader, Settings2, Workflow } from "lucide-react";
-import { on } from "../transport";
+import { IS_PLUGIN, on } from "../transport";
 import { useStudio } from "../studio";
 import { useTelemetry } from "../api";
 import Meter from "./Meter";
@@ -75,21 +75,35 @@ export default function TitleBar() {
       <Warming />
 
       <div className="titlebar-center" data-tauri-drag-region>
-        <button className={`chip audio-chip ${a ? "ok" : "bad"}`} onClick={actions.openSettings}>
-          <span className="dot" />
-          {a ? (
-            <>
-              <span className="truncate">{a.inputDevice}</span>
-              <span className="sep">→</span>
-              <span className="truncate">{a.outputDevice}</span>
+        {IS_PLUGIN ? (
+          // Inside a DAW, the DAW runs the audio: nothing to configure here.
+          <span className={`chip audio-chip ${a ? "ok" : "bad"}`} title="The DAW runs the audio">
+            <span className="dot" />
+            {a ? (
               <span className="mono muted">
-                {(a.sampleRate / 1000).toFixed(1)} kHz · {a.bufferSize} · {a.latencyMs.toFixed(1)} ms
+                DAW · {(a.sampleRate / 1000).toFixed(1)} kHz · {a.inputChannels} ch in
               </span>
-            </>
-          ) : (
-            <span>Audio off — click to configure</span>
-          )}
-        </button>
+            ) : (
+              <span>Waiting for the DAW to start audio</span>
+            )}
+          </span>
+        ) : (
+          <button className={`chip audio-chip ${a ? "ok" : "bad"}`} onClick={actions.openSettings}>
+            <span className="dot" />
+            {a ? (
+              <>
+                <span className="truncate">{a.inputDevice}</span>
+                <span className="sep">→</span>
+                <span className="truncate">{a.outputDevice}</span>
+                <span className="mono muted">
+                  {(a.sampleRate / 1000).toFixed(1)} kHz · {a.bufferSize} · {a.latencyMs.toFixed(1)} ms
+                </span>
+              </>
+            ) : (
+              <span>Audio off — click to configure</span>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="titlebar-right">
@@ -99,11 +113,13 @@ export default function TitleBar() {
           <Meter id="master" />
         </div>
         <MuteButton />
-        <PhoneMenu />
+        {!IS_PLUGIN && <PhoneMenu />}
         <ThemeMenu />
-        <button className="icon-btn" onClick={actions.openSettings} aria-label="Audio settings">
-          <Settings2 size={18} />
-        </button>
+        {!IS_PLUGIN && (
+          <button className="icon-btn" onClick={actions.openSettings} aria-label="Audio settings">
+            <Settings2 size={18} />
+          </button>
+        )}
       </div>
     </header>
   );

@@ -3,17 +3,22 @@
 SHELL        := /bin/bash
 APP_DATA     := $(HOME)/Library/Application Support/dev.guitarstudio.app
 DEBUG_BIN    := target/debug/guitar-studio
+PLUGIN_DIR   := $(HOME)/Library/Audio/Plug-Ins
+# Some Command Line Tools installs leave an incomplete C++ header folder that shadows the
+# SDK's (the VST3 wrapper compiles C++); point the compiler at the SDK's headers then.
+SDK_CXX      := $(shell xcrun --show-sdk-path 2>/dev/null)/usr/include/c++/v1
+CXX_FIX      := $(if $(wildcard /Library/Developer/CommandLineTools/usr/include/c++/v1/cstdint),,CXXFLAGS="-nostdinc++ -isystem $(SDK_CXX)")
 FORMAT       ?= au
 PLUGIN       ?= nolly
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev build bundle run test test-engine lint fmt fmt-check check \
-        smoke preset-test param-test scene-test preset-timing params scan icons clean clean-all reset-settings
+        plugin plugin-install plugin-uninstall plugin-test smoke preset-test param-test scene-test preset-timing params scan icons clean clean-all reset-settings
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make \033[36m<target>\033[0m [VAR=value]\n\n"} \
 		/^[a-zA-Z_-]+:.*## / { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@printf "\nVariables: FORMAT=$(FORMAT) PLUGIN=$(PLUGIN) (used by smoke, preset-test, param-test, scene-test, params)\n\n"
+	@printf "\nVariables: FORMAT=$(FORMAT) PLUGIN=$(PLUGIN) (used by smoke, preset-test, param-test, scene-test, params); PRESET (plugin-test)\n\n"
 
 # ---------------------------------------------------------------- setup
 
@@ -46,16 +51,39 @@ icons: node_modules ## Regenerate app icons from assets/app-icon.svg
 	npx tauri icon assets/app-icon.svg -o src-tauri/icons
 	rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/Square* src-tauri/icons/StoreLogo.png
 
+# ---------------------------------------------------------------- plugin (DAW)
+
+plugin: node_modules ## Build the VST3 + CLAP plugin bundles into target/plugin
+	npm run build
+	$(CXX_FIX) cargo build --release -p gs-plugin
+	cargo build --release -p gs-engine --bin gs-scan
+	scripts/bundle-plugin.sh target/release
+
+plugin-install: plugin ## Build the plugin and install it for your DAWs (~/Library/Audio/Plug-Ins)
+	@mkdir -p "$(PLUGIN_DIR)/VST3" "$(PLUGIN_DIR)/CLAP"
+	rm -rf "$(PLUGIN_DIR)/VST3/Guitar Studio.vst3" "$(PLUGIN_DIR)/CLAP/Guitar Studio.clap"
+	cp -R "target/plugin/Guitar Studio.vst3" "$(PLUGIN_DIR)/VST3/"
+	cp -R "target/plugin/Guitar Studio.clap" "$(PLUGIN_DIR)/CLAP/"
+	@echo "Installed. In REAPER: Options → Preferences → Plug-ins → VST → Re-scan (CLAP is scanned automatically)."
+
+plugin-uninstall: ## Remove the installed plugin
+	rm -rf "$(PLUGIN_DIR)/VST3/Guitar Studio.vst3" "$(PLUGIN_DIR)/CLAP/Guitar Studio.clap"
+
+plugin-test: plugin ## Check the built plugin in a headless host (audio, Output, state; PRESET=name restores a preset)
+	$(CXX_FIX) cargo run --release -q -p gs-plugin --example host_check -- \
+		"target/plugin/Guitar Studio.clap" "target/plugin/Guitar Studio.vst3" \
+		$(if $(PRESET),--preset "$(APP_DATA)/presets/$(PRESET).json")
+
 # ---------------------------------------------------------------- quality
 
 test: test-engine ## Run all tests
 	npx tsc --noEmit
 
-test-engine: ## Run Rust engine unit tests
-	cargo test -p gs-engine
+test-engine: ## Run Rust engine and app unit tests
+	cargo test -p gs-engine -p gs-app
 
 lint: node_modules ## Clippy + TypeScript type-check
-	cargo clippy -p gs-engine -p guitar-studio --all-targets
+	$(CXX_FIX) cargo clippy -p gs-engine -p gs-app -p gs-plugin -p guitar-studio --all-targets
 	npx tsc --noEmit
 
 fmt: ## Format Rust code

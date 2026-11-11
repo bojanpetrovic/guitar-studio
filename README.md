@@ -138,6 +138,44 @@ opens the rig's pedalboard in its browser; nothing needs installing.
 Under `make dev`, the QR code points at the Vite server (it listens on the network for
 this) and the page connects back to the app's port, 7480.
 
+## Inside a DAW (REAPER and others)
+
+Guitar Studio also runs as a VST3 / CLAP effect plugin, so the whole rig (its plugins,
+cables, pedalboard, scenes) can sit on a DAW track.
+
+```sh
+make plugin-install   # build, then copy to ~/Library/Audio/Plug-Ins/{VST3,CLAP}
+```
+
+In REAPER, rescan plugins (Preferences → Plug-ins → VST → Re-scan; CLAP is picked up on
+its own), then put **Guitar Studio** on a track with your guitar as its input. The plugin
+window is the same app: rig, pedalboard, presets and scenes all work.
+
+- **Audio comes from the track.** The DAW sets the sample rate and buffer, so there are
+  no device settings. A mono track feeds both sides. A preset made in the desktop app
+  for, say, input 4 of your interface just uses the track's input.
+- **The rig is saved with the project.** Each instance remembers its rig, including its
+  plugins' settings. Presets and the plugin list are shared with the desktop app, so
+  presets saved in either show up in both.
+- **Output** is the one parameter the DAW can automate (rig level, −60 to +12 dB).
+- **Plugins load in the DAW's process.** Plugin scanning still runs in a separate
+  process (`gs-scan`, inside the bundle), so a crashing plugin can't take the DAW down
+  during a scan.
+- Preloading of the previous/next preset starts once you switch presets in the plugin
+  window, not when a project opens. This keeps a project with several rigs from loading
+  extra plugins.
+- In REAPER, turn on *Send all keyboard input to plugin* (FX window menu) to use the
+  pedalboard's keyboard shortcuts.
+- The plugin logs to `~/Library/Logs/Guitar Studio/plugin.log` (`RUST_LOG=debug` for
+  more). `GS_PLUGIN_DEV_URL=http://localhost:1420` loads the UI from `npm run dev`
+  instead of the bundle.
+- `make plugin-test PRESET="pedalboard demo"` loads the built bundles headless. It checks
+  audio, the Output parameter and saved state, and restores a preset as if from a
+  project.
+
+Not yet: an AU version (for Logic / GarageBand), the phone remote while running as a
+plugin, and reporting hosted plugins' latency to the DAW.
+
 ## Tuner & metronome
 
 A slim dock under the canvas, always there (on stage too): note, a cents strip and
@@ -169,8 +207,11 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
 
 | Path | What |
 |---|---|
-| `crates/gs-engine` | Audio engine: cpal I/O, graph compiler, RT executor, plugin hosting (truce-rack), tuner (McLeod pitch method), metronome |
-| `src-tauri` | Tauri shell: commands, plugin-editor windows, telemetry pump (30 Hz), phone-remote server (`remote.rs`) |
+| `crates/gs-engine` | Audio engine: cpal I/O or host-driven audio, graph compiler, RT executor, plugin hosting (truce-rack), tuner (McLeod pitch method), metronome |
+| `crates/gs-app` | App layer shared by the desktop app and the plugin: state, every UI command (`dispatch`), presets, preloading, plugin-editor windows, telemetry pump (30 Hz) |
+| `crates/gs-plugin` | Guitar Studio as a VST3 / CLAP plugin (truce): host audio, project state, the UI in a webview |
+| `src-tauri` | Tauri shell: the `call` / `call_async` commands, phone-remote server (`remote.rs`) |
+| `scripts/bundle-plugin.sh` | Packages the plugin bundles (`make plugin`) |
 | `src` | React UI: React Flow patch canvas, plugin browser, tuner, metronome, settings |
 | `docs/RESEARCH.md` | Tech research and roadmap |
 | `vendor/truce-rack-vst3` | Patched copy of the VST3 host crate (see `vendor/README.md`) |
@@ -185,6 +226,10 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
 - **Plugins** sit behind a mutex. The audio thread only `try_lock`s it, and passes the
   dry signal through on contention, so it never blocks.
 - **Plugin editors** open in native windows; their `NSView` becomes the plugin's parent.
+- **One command layer.** The UI sends every command by name with JSON arguments. The
+  desktop window, the phone socket and the plugin window all go through
+  `gs_app::dispatch`. Work that needs the main thread from elsewhere uses the main
+  dispatch queue (`gs_app::main_thread`), which also works inside a DAW.
 
 ## Useful dev commands
 
