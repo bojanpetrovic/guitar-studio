@@ -23,7 +23,10 @@ import {
 
 interface Props {
   board: Board;
+  /** The control being edited, when exactly one is selected. */
   selected: Widget | null;
+  /** How many controls are selected. */
+  count: number;
   onChange: (w: Widget) => void;
   onDelete: () => void;
   onDuplicate: () => void;
@@ -191,8 +194,31 @@ function BindingStatus({ w }: { w: Widget }) {
   return <p className={`insp-status ${r.ok ? "ok" : "warn"}`}>{r.ok ? `→ ${r.target}` : `Missing: ${r.target}`}</p>;
 }
 
-export default function Inspector({ board, selected: w, onChange, onDelete, onDuplicate, onBoardChange, onGenerate }: Props) {
+export default function Inspector({ board, selected: w, count, onChange, onDelete, onDuplicate, onBoardChange, onGenerate }: Props) {
   const { studio } = useStudio();
+
+  if (count > 1) {
+    return (
+      <aside className="inspector">
+        <div className="insp-head">
+          <h3>{count} controls</h3>
+          <div className="row gap">
+            <button className="icon-btn ghost" title="Duplicate (⌘D)" onClick={onDuplicate}>
+              <Copy size={14} />
+            </button>
+            <button className="icon-btn ghost danger" title="Delete (⌫)" onClick={onDelete}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+        <p className="muted small hint-keys">
+          Drag any of them to move them together, or nudge them with the arrows. ⌘C / ⌘X / ⌘V copy, cut and paste
+          (onto another preset's board too), ⌘D duplicates, ⌫ deletes. ⇧-click a control to take it out of the
+          selection; select a single one to edit it.
+        </p>
+      </aside>
+    );
+  }
 
   if (!w) {
     return (
@@ -246,6 +272,8 @@ export default function Inspector({ board, selected: w, onChange, onDelete, onDu
         )}
         <p className="muted small hint-keys">
           Select a control to wire it up. Drag to move, pull the corner to resize, ⌫ to delete, ⌘D to duplicate, arrows to nudge.
+          ⇧-click or drag a box on the board to select several (⌘A for all), then move them together; ⌘C / ⌘V copy and
+          paste.
         </p>
       </aside>
     );

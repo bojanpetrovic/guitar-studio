@@ -52,7 +52,34 @@ const PALETTE: { type: WidgetType; icon: React.ReactNode }[] = [
   { type: "panel", icon: <Square size={15} /> },
 ];
 
-type Drag = { id: string; kind: "move" | "resize"; x: number; y: number; orig: Widget; moved: boolean };
+/** A move drags every selected widget (`orig`, as they were); a resize just `id`.
+ *  `collapse`: a plain click on a widget of a group selects just it, if nothing moved. */
+type Drag = { id: string; kind: "move" | "resize"; x: number; y: number; orig: Widget[]; moved: boolean; collapse: boolean };
+
+/** A selection box being dragged out on the board, in board units. */
+type Marquee = { x0: number; y0: number; x1: number; y1: number; base: string[]; moved: boolean };
+
+/** What ⌘C / ⌘X took, kept across presets so controls can be pasted onto another
+ *  board. `pastes` offsets each paste a step further, so copies don't stack up. */
+const clipboard: { widgets: Widget[]; pastes: number } = { widgets: [], pastes: 0 };
+
+/** How far `ws` can move by (dx, dy) and stay on the board, as a group. */
+function clampGroup(ws: Widget[], dx: number, dy: number, board: Board) {
+  const minX = Math.min(...ws.map((w) => w.x));
+  const minY = Math.min(...ws.map((w) => w.y));
+  const maxX = Math.max(...ws.map((w) => w.x + w.w));
+  const maxY = Math.max(...ws.map((w) => w.y + w.h));
+  return {
+    dx: Math.max(-minX, Math.min(board.width - maxX, dx)),
+    dy: Math.max(-minY, Math.min(board.height - maxY, dy)),
+  };
+}
+
+/** Copies of `ws` with new ids, moved by (dx, dy) as far as the board allows. */
+function copiesOf(ws: Widget[], dx: number, dy: number, board: Board): Widget[] {
+  const d = clampGroup(ws, dx, dy, board);
+  return ws.map((w) => ({ ...w, id: newId(), x: w.x + d.dx, y: w.y + d.dy, binding: { ...w.binding }, options: { ...w.options } }));
+}
 
 /** The two parameters most likely to matter on a pedal: gain/drive, then level/mix/tone… */
 function pickKnobs(params: ParamInfo[]) {
@@ -161,20 +188,23 @@ export default function PedalboardView() {
   const [draft, setDraft] = useState<Board | null>(null);
   const board = draft ?? stored;
   const [mode, setMode] = useState<"play" | "edit">(remote || stored.widgets.length ? "play" : "edit");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // A phone pauses polling while its link is down (requests would only pile up).
   const link = useLink();
   const runtime = useParamRuntime(board, studio, link === "open");
   const editing = mode === "edit";
   // A key-selected control stays selected only while this board is being played.
   useEffect(() => clearKeySelection, [editing, layoutKey]);
-  const selected = board.widgets.find((w) => w.id === selectedId) ?? null;
+  const selection = useMemo(() => board.widgets.filter((w) => selectedIds.includes(w.id)), [board.widgets, selectedIds]);
+  const isSelected = (id: string) => selectedIds.includes(id);
+  // The inspector edits one control at a time.
+  const selected = selection.length === 1 ? selection[0] : null;
 
   // A freshly loaded rig opens ready to play if it has a board, ready to design if not.
   useEffect(() => {
     if (!layoutKey) return;
     setMode(remote || parseBoard(studio.pedalboard).widgets.length ? "play" : "edit");
-    setSelectedId(null);
+    setSelectedIds([]);
     setDraft(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on rig swaps
   }, [layoutKey]);
@@ -189,6 +219,14 @@ export default function PedalboardView() {
   const updateWidget = useCallback(
     (w: Widget) => commit({ ...board, widgets: board.widgets.map((x) => (x.id === w.id ? w : x)) }),
     [board, commit],
+  );
+  /** The board with each of `changed` swapped in for its namesake. */
+  const withWidgets = useCallback(
+    (changed: Widget[]) => {
+      const byId = new Map(changed.map((w) => [w.id, w]));
+      return { ...board, widgets: board.widgets.map((x) => byId.get(x.id) ?? x) };
+    },
+    [board],
   );
 
   // ---- fit the board into the stage
@@ -226,7 +264,7 @@ export default function PedalboardView() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setMode((m) => (m === "edit" ? "play" : "edit"));
-        setSelectedId(null);
+        setSelectedIds([]);
       } else if (stage && !typing && e.key === "Escape" && !e.defaultPrevented) {
         setMode("edit");
       }
@@ -243,9 +281,21 @@ export default function PedalboardView() {
   const onWidgetDown = (e: React.PointerEvent, w: Widget, kind: Drag["kind"]) => {
     if (!editing) return;
     e.stopPropagation();
+    let ids = [w.id];
+    if (kind === "move" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+      // ⇧/⌘-click adds to the selection, or takes a widget back out of it.
+      if (isSelected(w.id)) {
+        setSelectedIds(selectedIds.filter((id) => id !== w.id));
+        return;
+      }
+      ids = [...selectedIds, w.id];
+    } else if (kind === "move" && isSelected(w.id)) {
+      ids = selectedIds; // grabbing one of a group moves the group
+    }
+    setSelectedIds(ids);
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    setSelectedId(w.id);
-    drag.current = { id: w.id, kind, x: e.clientX, y: e.clientY, orig: w, moved: false };
+    const orig = kind === "move" ? board.widgets.filter((x) => ids.includes(x.id)) : [w];
+    drag.current = { id: w.id, kind, x: e.clientX, y: e.clientY, orig, moved: false, collapse: ids.length > 1 && ids === selectedIds };
   };
   const onWidgetMove = (e: React.PointerEvent) => {
     const d = drag.current;
@@ -254,25 +304,77 @@ export default function PedalboardView() {
     const dy = (e.clientY - d.y) / scale;
     if (!d.moved && Math.hypot(dx, dy) < 2) return;
     d.moved = true;
-    const m = WIDGET_META[d.orig.type];
-    const next: Widget =
-      d.kind === "move"
-        ? {
-            ...d.orig,
-            x: Math.max(0, Math.min(board.width - d.orig.w, snap(d.orig.x + dx))),
-            y: Math.max(0, Math.min(board.height - d.orig.h, snap(d.orig.y + dy))),
-          }
-        : {
-            ...d.orig,
-            w: Math.max(m.minW, Math.min(board.width - d.orig.x, snap(d.orig.w + dx))),
-            h: Math.max(m.minH, Math.min(board.height - d.orig.y, snap(d.orig.h + dy))),
-          };
-    setDraft({ ...board, widgets: board.widgets.map((x) => (x.id === d.id ? next : x)) });
+    if (d.kind === "move") {
+      // The grabbed widget snaps to the grid; the rest keep their places relative to it.
+      const grabbed = d.orig.find((w) => w.id === d.id) ?? d.orig[0];
+      const by = clampGroup(d.orig, snap(grabbed.x + dx) - grabbed.x, snap(grabbed.y + dy) - grabbed.y, board);
+      setDraft(withWidgets(d.orig.map((w) => ({ ...w, x: w.x + by.dx, y: w.y + by.dy }))));
+    } else {
+      const w = d.orig[0];
+      const m = WIDGET_META[w.type];
+      setDraft(
+        withWidgets([
+          {
+            ...w,
+            w: Math.max(m.minW, Math.min(board.width - w.x, snap(w.w + dx))),
+            h: Math.max(m.minH, Math.min(board.height - w.y, snap(w.h + dy))),
+          },
+        ]),
+      );
+    }
   };
   // A cancelled gesture (lost capture, OS gesture) ends the drag like a release.
   const onWidgetUp = () => {
-    if (drag.current?.moved && draft) commit(draft);
+    const d = drag.current;
+    if (d?.moved && draft) commit(draft);
+    else if (d?.collapse) setSelectedIds([d.id]);
     drag.current = null;
+  };
+
+  // ---- selection box: drag on an empty part of the board to select what it touches
+  // (a pedal enclosure only when it's wholly inside, or it would catch everything on it).
+  const boardRef = useRef<HTMLDivElement>(null);
+  const marqueeRef = useRef<Marquee | null>(null);
+  const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const toBoard = (e: React.PointerEvent) => {
+    const r = boardRef.current!.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(board.width, (e.clientX - r.left) / scale)),
+      y: Math.max(0, Math.min(board.height, (e.clientY - r.top) / scale)),
+    };
+  };
+  const onStageDown = (e: React.PointerEvent) => {
+    if (!editing || e.button !== 0 || !boardRef.current) return;
+    // Not from the "Design your pedalboard" card: capturing would swallow its buttons' clicks.
+    if ((e.target as Element).closest(".pb-empty")) return;
+    const p = toBoard(e);
+    const add = e.shiftKey || e.metaKey || e.ctrlKey;
+    marqueeRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, base: add ? selectedIds : [], moved: false };
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    if (!add) setSelectedIds([]);
+  };
+  const onStageMove = (e: React.PointerEvent) => {
+    const m = marqueeRef.current;
+    if (!m) return;
+    const p = toBoard(e);
+    const next = { ...m, x1: p.x, y1: p.y, moved: m.moved || Math.hypot(p.x - m.x0, p.y - m.y0) * scale > 3 };
+    marqueeRef.current = next;
+    if (!next.moved) return;
+    setMarquee(next);
+    const [l, r] = [Math.min(next.x0, next.x1), Math.max(next.x0, next.x1)];
+    const [t, b] = [Math.min(next.y0, next.y1), Math.max(next.y0, next.y1)];
+    const hit = board.widgets
+      .filter((w) =>
+        w.type === "panel"
+          ? w.x >= l && w.x + w.w <= r && w.y >= t && w.y + w.h <= b
+          : w.x < r && w.x + w.w > l && w.y < b && w.y + w.h > t,
+      )
+      .map((w) => w.id);
+    setSelectedIds([...new Set([...next.base, ...hit])]);
+  };
+  const onStageUp = () => {
+    marqueeRef.current = null;
+    setMarquee(null);
   };
 
   const add = (type: WidgetType) => {
@@ -281,52 +383,87 @@ export default function PedalboardView() {
     const w = makeWidget(type, board.width / 2 - m.w / 2 + (n % 5) * GRID * 2, board.height / 2 - m.h / 2 + (n % 5) * GRID * 2);
     w.color = type === "panel" ? ENCLOSURES[n % ENCLOSURES.length] : ACCENTS[0];
     commit({ ...board, widgets: [...board.widgets, w] });
-    setSelectedId(w.id);
+    setSelectedIds([w.id]);
   };
 
   const remove = useCallback(() => {
-    if (!selectedId) return;
-    commit({ ...board, widgets: board.widgets.filter((w) => w.id !== selectedId) });
-    setSelectedId(null);
-  }, [board, selectedId, commit]);
+    if (!selectedIds.length) return;
+    commit({ ...board, widgets: board.widgets.filter((w) => !selectedIds.includes(w.id)) });
+    setSelectedIds([]);
+  }, [board, selectedIds, commit]);
 
+  /** Adds `copies` to the board and selects them. */
+  const place = useCallback(
+    (copies: Widget[]) => {
+      commit({ ...board, widgets: [...board.widgets, ...copies] });
+      setSelectedIds(copies.map((w) => w.id));
+    },
+    [board, commit],
+  );
   const duplicate = useCallback(() => {
-    if (!selected) return;
-    const copy = { ...selected, id: newId(), x: snap(selected.x + 20), y: snap(selected.y + 20) };
-    commit({ ...board, widgets: [...board.widgets, copy] });
-    setSelectedId(copy.id);
-  }, [board, selected, commit]);
+    if (selection.length) place(copiesOf(selection, GRID * 2, GRID * 2, board));
+  }, [board, selection, place]);
+  const copy = useCallback(() => {
+    if (!selection.length) return false;
+    clipboard.widgets = selection.map((w) => ({ ...w }));
+    clipboard.pastes = 0;
+    return true;
+  }, [selection]);
+  const paste = useCallback(() => {
+    if (!clipboard.widgets.length) return;
+    // Onto another board: where they were. Next to the originals otherwise.
+    const here = clipboard.widgets.some((w) => board.widgets.some((x) => x.id === w.id));
+    const step = GRID * 2 * (++clipboard.pastes - (here ? 0 : 1));
+    place(copiesOf(clipboard.widgets, step, step, board));
+  }, [board, place]);
 
   useEffect(() => {
     if (!editing) return;
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e)) return;
-      if (!selected) return;
+      const cmd = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (cmd && key === "a") {
+        e.preventDefault();
+        setSelectedIds(board.widgets.map((w) => w.id));
+        return;
+      }
+      if (cmd && key === "v") {
+        e.preventDefault();
+        paste();
+        return;
+      }
+      if (!selection.length) return;
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         remove();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+      } else if (cmd && key === "d") {
         e.preventDefault();
         duplicate();
+      } else if (cmd && (key === "c" || key === "x")) {
+        // Leave copying selected text (outside the board) to the browser.
+        if (!window.getSelection()?.isCollapsed) return;
+        e.preventDefault();
+        if (copy() && key === "x") remove();
       } else if (e.key.startsWith("Arrow")) {
         e.preventDefault();
         const step = e.shiftKey ? GRID * 5 : GRID;
-        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
-        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
-        updateWidget({
-          ...selected,
-          x: Math.max(0, Math.min(board.width - selected.w, selected.x + dx)),
-          y: Math.max(0, Math.min(board.height - selected.h, selected.y + dy)),
-        });
+        const by = clampGroup(
+          selection,
+          e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0,
+          e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0,
+          board,
+        );
+        commit(withWidgets(selection.map((w) => ({ ...w, x: w.x + by.dx, y: w.y + by.dy }))));
       } else if (e.key === "Escape") {
-        setSelectedId(null);
+        setSelectedIds([]);
       }
     };
     // On document, so a selected widget claims the arrow keys before the window-level
     // tempo keys see them (those skip events that were already handled).
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [editing, selected, board, remove, duplicate, updateWidget]);
+  }, [editing, selection, board, remove, duplicate, copy, paste, commit, withWidgets]);
 
   // ---- "Build from rig"
   const generate = async () => {
@@ -391,7 +528,7 @@ export default function PedalboardView() {
     Object.assign(meter, { h: 300, label: "OUT" });
     widgets.push(tuner, tap, meter);
     commit(fitBoard({ ...board, widgets }));
-    setSelectedId(null);
+    setSelectedIds([]);
     actions.toast(`Built a board for ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`, "success");
   };
 
@@ -402,7 +539,7 @@ export default function PedalboardView() {
         {!bare && (
           <div className="pb-toolbar">
             <div className="segmented small mode">
-              <button className={!editing ? "on" : ""} onClick={() => (setMode("play"), setSelectedId(null))}>
+              <button className={!editing ? "on" : ""} onClick={() => (setMode("play"), setSelectedIds([]))}>
                 <Play size={13} /> Play
               </button>
               <button className={editing ? "on" : ""} onClick={() => setMode("edit")}>
@@ -428,11 +565,15 @@ export default function PedalboardView() {
           <div
             className="pb-stage"
             ref={stageRef}
-            onPointerDown={() => editing && setSelectedId(null)}
+            onPointerDown={onStageDown}
+            onPointerMove={onStageMove}
+            onPointerUp={onStageUp}
+            onPointerCancel={onStageUp}
             data-tauri-drag-region={stage || undefined}
           >
             <div className="pb-board-frame" style={{ width: board.width * scale, height: board.height * scale }}>
               <div
+                ref={boardRef}
                 className={`pb-board surface-${board.surface} ${editing ? "grid" : ""}`}
                 style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
                 data-tauri-drag-region={stage || undefined}
@@ -442,7 +583,7 @@ export default function PedalboardView() {
                 {drawOrder(board.widgets).map((w) => (
                   <div
                     key={w.id}
-                    className={`pb-widget type-${w.type} ${selectedId === w.id ? "selected" : ""}`}
+                    className={`pb-widget type-${w.type} ${isSelected(w.id) ? "selected" : ""}`}
                     style={{ left: w.x, top: w.y, width: w.w, height: w.h }}
                   >
                     <WidgetView w={w} editing={editing} />
@@ -467,6 +608,17 @@ export default function PedalboardView() {
                   </div>
                 ))}
               </div>
+              {marquee && (
+                <div
+                  className="pb-marquee"
+                  style={{
+                    left: Math.min(marquee.x0, marquee.x1) * scale,
+                    top: Math.min(marquee.y0, marquee.y1) * scale,
+                    width: Math.abs(marquee.x1 - marquee.x0) * scale,
+                    height: Math.abs(marquee.y1 - marquee.y0) * scale,
+                  }}
+                />
+              )}
             </div>
 
             {board.widgets.length === 0 && remote && (
@@ -500,6 +652,7 @@ export default function PedalboardView() {
             <Inspector
               board={board}
               selected={selected}
+              count={selection.length}
               onChange={updateWidget}
               onDelete={remove}
               onDuplicate={duplicate}

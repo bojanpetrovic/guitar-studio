@@ -79,6 +79,9 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
 - **Edit mode** has a palette of footswitches, knobs, faders, selectors, meters,
   labels, pedal enclosures and a tuner display. Drag to move, pull a corner to
   resize; everything snaps to the grid. ⌫ deletes, ⌘D duplicates, arrow keys nudge.
+  Select several controls with ⇧-click (or ⌘-click), by dragging a box over an empty
+  part of the board, or with ⌘A, then move, nudge, duplicate or delete them together.
+  ⌘C / ⌘X / ⌘V copy, cut and paste, also onto another preset's board.
 - **Wiring:** select a control and choose what it drives in the inspector. Options are
   any plugin parameter (searchable), a node's bypass or level, a mixer strip's
   volume, pan or mute, metronome on/off, tap tempo, tempo, or the tuner. Meters can show any node's output or the main out.

@@ -1897,6 +1897,15 @@ select {
   border-radius: 10px;
   z-index: 5;
 }
+/* Selection box, drawn over the board (screen units). */
+.pb-marquee {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .pb-edit-overlay {
   position: absolute;
   inset: 0;
