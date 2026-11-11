@@ -16,6 +16,15 @@ The first launch has no plugin list. Click the refresh icon in the Plugins panel
 Each format is scanned in its own child process, so a crashing plugin can't take the app
 down. A full scan takes about a minute and the results are cached.
 
+## Replacing a plugin
+
+Swap a plugin for another without rewiring: click ⇄ on its node and pick one, with
+search and arrow keys; plugins from the same vendor are listed first. Or drag a plugin
+from the list and drop it onto the node. The node keeps its cables, place and on/off
+state, so footswitches still work. The new plugin starts at its own defaults, and
+scenes forget the old one's settings. Pedalboard knobs move to the new plugin's
+parameter with the same name; any without a match are reported for rebinding.
+
 ## Presets
 
 A preset saves the whole rig: nodes, cables, levels, bypass states, the input

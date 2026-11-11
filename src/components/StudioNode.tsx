@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Handle, NodeProps, Position } from "@xyflow/react";
-import { AudioWaveform, Blend, Cable, ExternalLink, Power, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
+import { AudioWaveform, Blend, Cable, ExternalLink, Power, Replace, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useStudio } from "../App";
 import { formatLabel } from "../api";
 import type { StudioFlowNode } from "./GraphCanvas";
@@ -76,6 +76,9 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
               <ExternalLink size={13} /> Open
             </button>
             <span className="spacer" />
+            <button className="icon-btn" onClick={() => actions.pickReplacement(n.id)} title="Replace with another plugin (or drop one from the list onto this node)">
+              <Replace size={14} />
+            </button>
             <button
               className={`icon-btn toggle ${n.bypass ? "" : "on"}`}
               onClick={() => actions.setBypass(n.id, !n.bypass)}

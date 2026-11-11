@@ -188,6 +188,43 @@ fn set_mixer_strip(
         .map_err(err)
 }
 
+/// Swap the plugin in node `id` for another (`key` from the catalog), keeping the
+/// node's cables and place. Sync: plugins load on the main thread.
+#[tauri::command]
+fn replace_plugin(
+    app: AppHandle,
+    state: State<AppState>,
+    id: u32,
+    key: String,
+) -> CmdResult<StudioView> {
+    let desc = state
+        .catalog
+        .lock()
+        .plugins
+        .iter()
+        .find(|p| p.key() == key)
+        .cloned()
+        .ok_or("plugin not found — try rescanning")?;
+    let sample_rate = {
+        let studio = state.studio.lock();
+        if !studio.is_plugin(id) {
+            return Err("only plugins can be replaced".into());
+        }
+        studio.sample_rate()
+    };
+    editor::close(&app, &state, id);
+    // Load without holding the studio lock: some plugins take seconds to start.
+    let slot = plugins::load_plugin(&desc, sample_rate, MAX_BLOCK).map_err(|e| format!("{e:#}"))?;
+    let mut studio = state.studio.lock();
+    let old = studio
+        .replace_plugin(id, Arc::new(Mutex::new(slot)))
+        .map_err(err)?;
+    // The old instance may still be wanted by a neighbouring preset.
+    state.warm.put_back(vec![old]);
+    warm::refresh(&app);
+    Ok(studio.view())
+}
+
 #[tauri::command]
 fn remove_node(app: AppHandle, state: State<AppState>, id: u32) -> CmdResult<StudioView> {
     editor::close(&app, &state, id);
@@ -412,6 +449,7 @@ pub fn run() {
         add_mixer_node,
         set_mixer_strip,
         remove_node,
+        replace_plugin,
         connect,
         disconnect,
         set_node_param,

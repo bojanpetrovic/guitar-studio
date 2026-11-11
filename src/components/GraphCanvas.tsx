@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -19,7 +19,7 @@ import { useTheme } from "../themes";
 import StudioNode from "./StudioNode";
 import SceneBar from "./SceneBar";
 import SignalEdge from "./SignalEdge";
-import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER } from "./PluginBrowser";
+import { DRAG_GAIN, DRAG_MIME, DRAG_MIXER, DRAG_REPLACEABLE } from "./PluginBrowser";
 
 export type StudioFlowNode = Node<{ node: NodeView }, "studio">;
 
@@ -87,11 +87,52 @@ export default function GraphCanvas() {
     [],
   );
 
+  // Dropping a plugin onto a plugin node replaces it; the node lights up while you hover.
+  const dropTarget = useRef<Element | null>(null);
+  const markTarget = useCallback((el: Element | null) => {
+    if (dropTarget.current === el) return;
+    dropTarget.current?.classList.remove("drop-replace");
+    el?.classList.add("drop-replace");
+    dropTarget.current = el;
+  }, []);
+  const pluginNodeAt = useCallback(
+    (e: React.DragEvent) => {
+      const el = (e.target as Element).closest?.(".react-flow__node");
+      const node = el && studio.nodes.find((n) => String(n.id) === el.getAttribute("data-id"));
+      return node?.kind === "plugin" ? { el: el!, node } : null;
+    },
+    [studio.nodes],
+  );
+  useEffect(() => {
+    const clear = () => markTarget(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+    };
+  }, [markTarget]);
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const replaces = e.dataTransfer.types.includes(DRAG_REPLACEABLE);
+      markTarget(replaces ? (pluginNodeAt(e)?.el ?? null) : null);
+    },
+    [markTarget, pluginNodeAt],
+  );
+
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      markTarget(null);
       const key = e.dataTransfer.getData(DRAG_MIME);
       if (!key) return;
+      const target = key !== DRAG_GAIN && key !== DRAG_MIXER ? pluginNodeAt(e) : null;
+      if (target) {
+        const plugin = catalog.plugins.find((p) => `${p.format}:${p.uniqueId}` === key);
+        if (plugin) actions.replacePlugin(target.node.id, plugin);
+        return;
+      }
       const pos = screenToFlowPosition({ x: e.clientX - 120, y: e.clientY - 40 });
       if (key === DRAG_GAIN) {
         actions.addGain(pos);
@@ -104,11 +145,11 @@ export default function GraphCanvas() {
       const plugin = catalog.plugins.find((p) => `${p.format}:${p.uniqueId}` === key);
       if (plugin) actions.addPlugin(plugin, pos);
     },
-    [screenToFlowPosition, catalog.plugins, actions],
+    [screenToFlowPosition, catalog.plugins, actions, markTarget, pluginNodeAt],
   );
 
   return (
-    <div className="canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="canvas" onDragOver={onDragOver} onDrop={onDrop}>
       {!studio.audio && (
         <div className="banner">
           <AlertTriangle size={16} />

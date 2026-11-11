@@ -308,6 +308,30 @@ impl Studio {
         Ok(id)
     }
 
+    /// Put a different plugin into a plugin node. Its cables, mixer strips, position and
+    /// on/off state stay; scenes forget the old plugin's parameter values (the new one
+    /// has its own parameters). Returns the old plugin for the caller to release on the
+    /// main thread.
+    pub fn replace_plugin(&mut self, id: NodeId, plugin: SharedPlugin) -> Result<SharedPlugin> {
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or_else(|| anyhow!("no node {id}"))?;
+        let Some(old) = node.plugin.replace(plugin) else {
+            bail!("only plugins can be replaced");
+        };
+        for scene in &mut self.scenes {
+            scene.params.remove(&id);
+        }
+        self.rebuild()?;
+        Ok(old)
+    }
+
+    /// Is `id` a plugin node?
+    pub fn is_plugin(&self, id: NodeId) -> bool {
+        self.nodes.get(&id).is_some_and(|n| n.plugin.is_some())
+    }
+
     pub fn remove_node(&mut self, id: NodeId) -> Result<Option<SharedPlugin>> {
         let node = self.nodes.get(&id).ok_or_else(|| anyhow!("no node {id}"))?;
         if matches!(node.kind, NodeType::Input | NodeType::Output) {

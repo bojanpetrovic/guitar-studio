@@ -24,6 +24,8 @@ import Toasts, { Toast } from "./components/Toasts";
 import PedalboardView from "./pedalboard/PedalboardView";
 import { recoverFrame } from "./stageWindow";
 import RemoteShell, { RemoteBoot } from "./remote/RemoteShell";
+import ReplaceDialog from "./components/ReplaceDialog";
+import { parseBoard } from "./pedalboard/types";
 
 type Pos = { x: number; y: number };
 
@@ -33,6 +35,10 @@ export interface StudioActions {
   addMixer: (pos?: Pos) => Promise<void>;
   setMixerStrip: (id: number, source: number, field: StripField, value: number) => void;
   remove: (id: number) => Promise<void>;
+  /** Open the "Replace with…" picker for a plugin node. */
+  pickReplacement: (id: number) => void;
+  /** Swap the plugin in node `id` for `p`, keeping its cables, place and board controls. */
+  replacePlugin: (id: number, p: PluginDescriptor) => Promise<void>;
   connect: (from: number, to: number) => Promise<void>;
   disconnect: (from: number, to: number) => Promise<void>;
   setParam: (id: number, param: "gainDb" | "channel", value: number) => void;
@@ -90,6 +96,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog>({ plugins: [], errors: [], scannedAt: null, scanning: false });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [replacing, setReplacing] = useState<number | null>(null);
   const [presets, setPresets] = useState<PresetList>({ presets: [], current: null, last: null, dir: "" });
   const [layoutKey, setLayoutKey] = useState(0);
   const [view, setView] = useState<View>("rig");
@@ -307,6 +314,40 @@ export default function App() {
         const [id, view] = res;
         applyView(autoWire ? await appendToChain(id, view) : view);
       },
+      pickReplacement: setReplacing,
+      replacePlugin: async (id, p) => {
+        const before = studioRef.current;
+        const old = before?.nodes.find((n) => n.id === id)?.plugin;
+        if (!before || !old || pluginKey(old) === pluginKey(p)) return;
+        const loading = toast(`Loading ${p.name}…`, "loading");
+        await nextFrame(); // plugins load on the main thread
+        const v = await guard(() => api.replacePlugin(id, pluginKey(p)));
+        dismiss(loading);
+        if (!v) return;
+        applyView(v);
+        // Board controls on the old plugin's parameters: move them to the new plugin's
+        // parameter of the same name, where there is one.
+        const board = parseBoard(before.pedalboard);
+        const bound = board.widgets.filter((w) => w.binding.kind === "param" && w.binding.node === id);
+        let lost = 0;
+        if (bound.length) {
+          const params = await api.pluginParams(id).catch(() => []);
+          const byName = new Map(params.map((q) => [q.name.trim().toLowerCase(), q]));
+          const widgets = board.widgets.map((w) => {
+            if (w.binding.kind !== "param" || w.binding.node !== id) return w;
+            const q = byName.get(w.binding.paramName.trim().toLowerCase());
+            if (!q) {
+              lost++;
+              return w;
+            }
+            return { ...w, binding: { ...w.binding, paramId: q.id, paramName: q.name } };
+          });
+          setStudio((s) => s && { ...s, pedalboard: { ...board, widgets } });
+          api.setPedalboard({ ...board, widgets }).catch((e) => toast(String(e), "error"));
+        }
+        toast(`Replaced ${old.name} with ${p.name}`, "success");
+        if (lost) toast(`${lost} pedalboard control${lost === 1 ? "" : "s"} for ${old.name} need a new parameter`, "info");
+      },
       remove: async (id) => {
         const v = await guard(() => api.removeNode(id));
         if (v) applyView(v);
@@ -443,6 +484,9 @@ export default function App() {
           <Dock />
         </div>
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+        {replacing !== null && studio.nodes.some((n) => n.id === replacing && n.plugin) && (
+          <ReplaceDialog node={studio.nodes.find((n) => n.id === replacing)!} onClose={() => setReplacing(null)} />
+        )}
         <Toasts toasts={toasts} onDismiss={dismiss} />
       </ReactFlowProvider>
     </StudioContext.Provider>

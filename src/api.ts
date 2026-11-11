@@ -192,6 +192,7 @@ export const api = {
   setMixerStrip: (id: number, source: number, field: StripField, value: number) =>
     invoke<void>("set_mixer_strip", { id, source, field, value }),
   removeNode: (id: number) => invoke<StudioView>("remove_node", { id }),
+  replacePlugin: (id: number, key: string) => invoke<StudioView>("replace_plugin", { id, key }),
   connect: (from: number, to: number) => invoke<StudioView>("connect", { from, to }),
   disconnect: (from: number, to: number) => invoke<StudioView>("disconnect", { from, to }),
   setNodeParam: (id: number, param: "gainDb" | "channel", value: number) =>
