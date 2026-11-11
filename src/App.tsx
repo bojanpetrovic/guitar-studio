@@ -146,14 +146,16 @@ export default function App() {
 
   const loadPresetNow = useCallback(
     async (name: string) => {
-      const loading = toast(`Loading “${name}”…`, "loading");
-      await nextFrame(); // let the toast paint: plugins load on the main thread
+      // Instant when every plugin it needs is already running or kept warm.
+      const ready = await api.presetReady(name).catch(() => false);
+      const loading = ready ? null : toast(`Loading “${name}”…`, "loading");
+      if (!ready) await nextFrame(); // let the toast paint: plugins load on the main thread
       try {
         applyLoad(await api.loadPreset(name));
       } catch (e) {
         toast(String(e), "error");
       } finally {
-        dismiss(loading);
+        if (loading !== null) dismiss(loading);
       }
     },
     [toast, dismiss, applyLoad],

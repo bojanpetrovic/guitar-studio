@@ -214,6 +214,8 @@ export const api = {
   deleteScene: (index: number) => invoke<StudioView>("delete_scene", { index }),
 
   listPresets: () => invoke<PresetList>("list_presets"),
+  /** True when loading needs no plugin started (all running or kept warm): instant. */
+  presetReady: (name: string) => invoke<boolean>("preset_ready", { name }),
   savePreset: (name: string, overwrite = false) =>
     invoke<[PresetList, string[]]>("save_preset", { name, overwrite }),
   loadPreset: (name: string) => invoke<PresetLoad>("load_preset", { name }),

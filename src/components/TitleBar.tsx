@@ -1,5 +1,6 @@
-import { useEffect } from "react";
-import { Cpu, LayoutDashboard, Settings2, Workflow } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Cpu, LayoutDashboard, Loader, Settings2, Workflow } from "lucide-react";
+import { on } from "../transport";
 import { useStudio } from "../App";
 import { useTelemetry } from "../api";
 import Meter from "./Meter";
@@ -16,6 +17,20 @@ function CpuReadout() {
       <Cpu size={14} />
       <span className="mono cpu-value">{pct}%</span>
     </div>
+  );
+}
+
+/** "Preloading X" while a neighbouring preset's plugin starts in the background (the
+ *  window may pause for a moment while it does). */
+function Warming() {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => on<string | null>("warming", setName), []);
+  if (!name) return null;
+  return (
+    <span className="chip warming" title="Getting the previous / next preset ready so switching is instant">
+      <Loader size={12} className="spin" />
+      <span className="truncate">Preloading {name}</span>
+    </span>
   );
 }
 
@@ -56,6 +71,7 @@ export default function TitleBar() {
       </div>
       <PresetMenu />
       <ViewSwitch />
+      <Warming />
 
       <div className="titlebar-center" data-tauri-drag-region>
         <button className={`chip audio-chip ${a ? "ok" : "bad"}`} onClick={actions.openSettings}>

@@ -246,6 +246,12 @@ pub struct ParamInfo {
 }
 
 impl PluginSlot {
+    /// Forget remembered parameter values (after the plugin's whole state was replaced).
+    pub fn forget_values(&mut self) {
+        self.value_cache.clear();
+        self.last_write = None;
+    }
+
     pub fn param_index(&self, id: u32) -> Option<usize> {
         self.params.iter().position(|p| p.id == id)
     }

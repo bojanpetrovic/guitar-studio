@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     settle(&studio, id);
     let (patch, warnings) = studio.to_patch("Scenes");
     let patch: Patch = serde_json::from_str(&serde_json::to_string(&patch)?)?;
-    let (slots, w2) = instantiate_plugins(&patch, 48_000.0);
+    let (slots, w2) = instantiate_plugins(&patch, 48_000.0, &mut Vec::new());
     for w in warnings.iter().chain(&w2) {
         println!("  warning: {w}");
     }

@@ -8,7 +8,7 @@ PLUGIN       ?= nolly
 
 .DEFAULT_GOAL := help
 .PHONY: help install dev build bundle run test test-engine lint fmt fmt-check check \
-        smoke preset-test param-test scene-test params scan icons clean clean-all reset-settings
+        smoke preset-test param-test scene-test preset-timing params scan icons clean clean-all reset-settings
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make \033[36m<target>\033[0m [VAR=value]\n\n"} \
@@ -79,6 +79,9 @@ param-test: ## Set + read back a plugin's parameters, e.g. make param-test FORMA
 
 scene-test: ## Switch scenes on a real plugin and save/reload them, e.g. make scene-test FORMAT=au PLUGIN=nolly
 	cargo run -p gs-engine --example scene_switch -- $(FORMAT) "$(PLUGIN)"
+
+preset-timing: ## Time plugin start-up vs. state restore, and preset switches, over your saved presets
+	cargo run --release -p gs-engine --example preset_timing -- "$(APP_DATA)/presets"
 
 params: ## List a plugin's parameters and ids, e.g. make params FORMAT=au PLUGIN=nolly
 	cargo run -q -p gs-engine --example list_params -- $(FORMAT) "$(PLUGIN)"

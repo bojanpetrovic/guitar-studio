@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     // Fresh studio, load from disk like the app does.
     let loaded = store.load("nolly rhythm")?;
     let mut fresh = Studio::new();
-    let (slots, warnings) = instantiate_plugins(&loaded, fresh.sample_rate());
+    let (slots, warnings) = instantiate_plugins(&loaded, fresh.sample_rate(), &mut Vec::new());
     fresh.apply_patch(&loaded, slots)?;
     pump(0.3);
 

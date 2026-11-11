@@ -1,6 +1,7 @@
 mod editor;
 mod presets;
 mod remote;
+mod warm;
 
 use gs_engine::Studio;
 use gs_engine::audio::{self, AudioConfig, DeviceList};
@@ -46,6 +47,8 @@ pub struct AppState {
     /// new rig from an edited one.
     rig: AtomicU64,
     remote: Arc<remote::Hub>,
+    /// Spare plugin instances for fast preset switching.
+    warm: warm::Warm,
 }
 
 impl AppState {
@@ -75,7 +78,12 @@ fn list_devices() -> DeviceList {
 #[tauri::command]
 fn set_audio_config(state: State<AppState>, config: AudioConfig) -> CmdResult<StudioView> {
     let mut studio = state.studio.lock();
+    let rate = studio.sample_rate();
     let result = studio.start_audio(config.clone());
+    if (studio.sample_rate() - rate).abs() > 0.5 {
+        // Spares would still run at the old rate (the rig's plugins were reactivated).
+        state.warm.clear(&state);
+    }
     if let Ok(json) = serde_json::to_vec_pretty(&config) {
         let _ = std::fs::write(state.settings_path(), json);
     }
@@ -326,6 +334,17 @@ fn set_tuner(state: State<AppState>, enabled: bool, reference_a4: Option<f32>) {
     state.studio.lock().set_tuner(enabled, reference_a4);
 }
 
+/// Would loading this preset need to start any plugin? (If not it's instant, and the UI
+/// skips the "Loading…" notice.)
+#[tauri::command]
+fn preset_ready(state: State<AppState>, name: String) -> bool {
+    state.presets.load(&name).is_ok_and(|patch| {
+        state
+            .warm
+            .covers(&state, &gs_engine::presets::patch_plugins(&patch))
+    })
+}
+
 // ---------------------------------------------------------------- phone remote
 
 /// Everything a second screen needs to mirror the rig (pushed as the `sync` event).
@@ -414,6 +433,7 @@ pub fn run() {
         remote_status,
         set_remote,
         renew_remote_link,
+        preset_ready,
         presets::list_presets,
         presets::save_preset,
         presets::load_preset,
@@ -458,6 +478,7 @@ pub fn run() {
                 current_preset: Mutex::new(None),
                 rig: AtomicU64::new(0),
                 remote: hub.clone(),
+                warm: warm::Warm::default(),
             });
             hub.init(app.handle(), data_dir_for_remote);
 

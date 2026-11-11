@@ -30,6 +30,14 @@ exactly.
   You can back them up or copy them between machines.
 - If a plugin in a preset isn't installed, the rest of the rig still loads, and a
   warning names the missing plugin.
+- **Switching is fast.** Starting a plugin can take seconds (Archetype Nolly: ~2.3 s),
+  but restoring settings into one that's already running takes milliseconds. So a switch
+  reuses running instances of the same plugins: Mixer Demo ↔ Pedalboard Demo takes ~2 ms
+  instead of ~2.2 s. Spare instances that the previous or next preset in the list
+  needs are kept loaded. Missing ones are preloaded in the background a moment after a
+  switch; a *Preloading …* chip shows in the title bar, and the window may pause briefly
+  while a big plugin starts (audio keeps playing).
+- A reused delay or reverb carries its tail into the next preset (spillover).
 
 ## Mixer
 
@@ -166,6 +174,7 @@ make smoke FORMAT=au PLUGIN=nolly       # load, process and state-round-trip a p
 make preset-test FORMAT=au PLUGIN=nolly # save and reload a rig with a real plugin
 make param-test FORMAT=au PLUGIN=nolly  # set and read back a plugin's parameters through the engine
 make scene-test FORMAT=au PLUGIN=nolly  # switch scenes on a real plugin, save and reload them
+make preset-timing                      # where preset switching spends its time, per plugin
 make params FORMAT=au PLUGIN=nolly      # list a plugin's parameters (ids for pedalboard bindings)
 make scan                               # rescan plugins into the app's cache
 make reset-settings                     # forget the saved audio device and plugin cache

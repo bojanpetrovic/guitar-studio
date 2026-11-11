@@ -7,15 +7,17 @@
 use crate::graph::NodeId;
 use crate::metronome::MetronomeSettings;
 use crate::nodes::MAX_BLOCK;
-use crate::plugins::{self, PluginDescriptor, PluginSlot};
+use crate::plugins::{self, PluginDescriptor, SharedPlugin};
 use crate::scenes::Scene;
 use crate::studio::NodeType;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const FORMAT_TAG: &str = "guitar-studio-preset";
 pub const FORMAT_VERSION: u32 = 1;
@@ -108,38 +110,59 @@ pub struct PresetInfo {
     pub plugins: Vec<String>,
 }
 
-/// Load every plugin a patch needs (call on the **main thread**, without the studio
-/// lock) and restore their states. Plugins that can't be loaded are reported in
-/// the returned warnings and left out.
+/// Get every plugin a patch needs and restore their states (call on the **main
+/// thread**, without the studio lock). A running instance of the same plugin in
+/// `spares` is reused (restoring a state takes milliseconds, starting a big amp sim
+/// takes seconds) and removed from `spares`; anything else is loaded fresh. Plugins
+/// that can't be loaded are reported in the returned warnings and left out.
 pub fn instantiate_plugins(
     patch: &Patch,
     sample_rate: f64,
-) -> (HashMap<NodeId, PluginSlot>, Vec<String>) {
+    spares: &mut Vec<SharedPlugin>,
+) -> (HashMap<NodeId, SharedPlugin>, Vec<String>) {
     let mut slots = HashMap::new();
     let mut warnings = Vec::new();
     for node in patch.nodes.iter().filter(|n| n.kind == NodeType::Plugin) {
         let Some(desc) = &node.plugin else { continue };
-        match plugins::load_plugin(desc, sample_rate, MAX_BLOCK) {
-            Ok(mut slot) => {
-                if let Some(state) = &node.state {
-                    let restored = Patch::decode_state(state)
-                        .and_then(|bytes| Ok(slot.plugin.load_state(&bytes)?));
-                    if let Err(e) = restored {
-                        warnings.push(format!(
-                            "{}: settings couldn't be restored ({e})",
-                            desc.name
-                        ));
-                    }
+        let key = desc.key();
+        let plugin = match spares.iter().position(|p| p.lock().descriptor.key() == key) {
+            Some(i) => spares.swap_remove(i),
+            None => match plugins::load_plugin(desc, sample_rate, MAX_BLOCK) {
+                Ok(slot) => Arc::new(Mutex::new(slot)),
+                Err(e) => {
+                    warnings.push(format!(
+                        "{} is missing or failed to load ({e:#})",
+                        desc.name
+                    ));
+                    continue;
                 }
-                slots.insert(node.id, slot);
+            },
+        };
+        if let Some(state) = &node.state {
+            let mut slot = plugin.lock();
+            let restored =
+                Patch::decode_state(state).and_then(|bytes| Ok(slot.plugin.load_state(&bytes)?));
+            slot.forget_values();
+            if let Err(e) = restored {
+                warnings.push(format!(
+                    "{}: settings couldn't be restored ({e})",
+                    desc.name
+                ));
             }
-            Err(e) => warnings.push(format!(
-                "{} is missing or failed to load ({e:#})",
-                desc.name
-            )),
         }
+        slots.insert(node.id, plugin);
     }
     (slots, warnings)
+}
+
+/// The plugins a patch uses (one entry per plugin node).
+pub fn patch_plugins(patch: &Patch) -> Vec<PluginDescriptor> {
+    patch
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeType::Plugin)
+        .filter_map(|n| n.plugin.clone())
+        .collect()
 }
 
 /// A folder of `*.json` presets.

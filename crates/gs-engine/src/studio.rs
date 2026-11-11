@@ -522,6 +522,14 @@ impl Studio {
             .collect()
     }
 
+    /// The running plugin instances (for reuse by the next rig).
+    pub fn plugin_instances(&self) -> Vec<SharedPlugin> {
+        self.nodes
+            .values()
+            .filter_map(|n| n.plugin.clone())
+            .collect()
+    }
+
     /// Capture the current rig. Plugin states are read from each plugin (briefly
     /// locking it); failures are returned as warnings rather than aborting the save.
     pub fn to_patch(&self, name: &str) -> (Patch, Vec<String>) {
@@ -585,15 +593,18 @@ impl Studio {
     /// Replace the whole graph with `patch`. `slots` holds the patch's plugins,
     /// already loaded by [`presets::instantiate_plugins`]; plugin nodes without a slot
     /// (missing plugins) are dropped along with their cables. Returns the previous
-    /// plugins so the caller can release them on the main thread.
+    /// plugins the new rig doesn't use, so the caller can keep or release them on the
+    /// main thread.
     pub fn apply_patch(
         &mut self,
         patch: &Patch,
-        mut slots: HashMap<NodeId, PluginSlot>,
+        mut slots: HashMap<NodeId, SharedPlugin>,
     ) -> Result<Vec<SharedPlugin>> {
+        // Instances the new rig reuses aren't "old".
         let old: Vec<SharedPlugin> = std::mem::take(&mut self.nodes)
             .into_values()
             .filter_map(|n| n.plugin)
+            .filter(|p| !slots.values().any(|s| Arc::ptr_eq(s, p)))
             .collect();
         self.edges.clear();
         self.next_id = 1;
@@ -602,7 +613,7 @@ impl Studio {
         for n in &patch.nodes {
             let plugin = match n.kind {
                 NodeType::Plugin => match slots.remove(&n.id) {
-                    Some(slot) => Some(Arc::new(Mutex::new(slot))),
+                    Some(plugin) => Some(plugin),
                     None => continue,
                 },
                 NodeType::Input if have_input => continue,

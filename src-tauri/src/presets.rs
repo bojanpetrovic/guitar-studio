@@ -2,7 +2,7 @@
 //! instantiates plugins; plugins are loaded *before* taking the studio lock so the
 //! meters keep running while a heavy amp sim boots.
 
-use crate::{AppState, CmdResult, editor};
+use crate::{AppState, CmdResult, editor, warm};
 use gs_engine::presets::{self, PresetInfo, PresetStore};
 use gs_engine::studio::StudioView;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,7 @@ pub fn list_presets(state: State<AppState>) -> PresetList {
 /// preset (re-saving the current one never needs it).
 #[tauri::command]
 pub fn save_preset(
+    app: AppHandle,
     state: State<AppState>,
     name: String,
     overwrite: bool,
@@ -102,24 +103,34 @@ pub fn save_preset(
     let (patch, warnings) = state.studio.lock().to_patch(&name);
     state.presets.save(&patch).map_err(|e| format!("{e:#}"))?;
     set_current(&state, Some(name));
+    // The neighbours of the current preset may have changed.
+    warm::refresh(&app);
     Ok((list(&state), warnings))
 }
 
 #[tauri::command]
 pub fn load_preset(app: AppHandle, state: State<AppState>, name: String) -> CmdResult<PresetLoad> {
     let patch = state.presets.load(&name).map_err(|e| format!("{e:#}"))?;
-    let sample_rate = state.studio.lock().sample_rate();
-    let (slots, warnings) = presets::instantiate_plugins(&patch, sample_rate);
-
     close_all_editors(&app, &state);
+    // Offer the running instances and the warm spares for reuse (see warm.rs).
+    let (sample_rate, mut spares) = {
+        let studio = state.studio.lock();
+        (studio.sample_rate(), studio.plugin_instances())
+    };
+    spares.append(&mut state.warm.take());
+    let (slots, warnings) = presets::instantiate_plugins(&patch, sample_rate, &mut spares);
+
     let studio = {
         let mut studio = state.studio.lock();
-        let old = studio
+        // What the new rig doesn't use is in `spares` too; the audio thread lets go of
+        // it with the next schedule swap.
+        studio
             .apply_patch(&patch, slots)
             .map_err(|e| format!("{e:#}"))?;
-        state.graveyard.lock().extend(old);
         studio.view()
     };
+    state.warm.put_back(spares);
+    warm::refresh(&app);
     set_current(&state, Some(patch.name.clone()));
     Ok(PresetLoad {
         studio,
@@ -136,10 +147,11 @@ pub fn new_preset(app: AppHandle, state: State<AppState>) -> CmdResult<PresetLoa
     let studio = {
         let mut studio = state.studio.lock();
         let old = studio.reset_graph().map_err(|e| format!("{e:#}"))?;
-        state.graveyard.lock().extend(old);
+        state.warm.put_back(old);
         studio.view()
     };
     set_current(&state, None);
+    warm::refresh(&app);
     Ok(PresetLoad {
         studio,
         presets: list(&state),
@@ -149,7 +161,11 @@ pub fn new_preset(app: AppHandle, state: State<AppState>) -> CmdResult<PresetLoa
 }
 
 #[tauri::command]
-pub fn delete_preset(state: State<AppState>, name: String) -> CmdResult<PresetList> {
+pub fn delete_preset(
+    app: AppHandle,
+    state: State<AppState>,
+    name: String,
+) -> CmdResult<PresetList> {
     state.presets.delete(&name).map_err(|e| format!("{e:#}"))?;
     let was_current = state
         .current_preset
@@ -159,11 +175,18 @@ pub fn delete_preset(state: State<AppState>, name: String) -> CmdResult<PresetLi
     if was_current {
         set_current(&state, None);
     }
+    // The neighbours of the current preset may have changed.
+    warm::refresh(&app);
     Ok(list(&state))
 }
 
 #[tauri::command]
-pub fn rename_preset(state: State<AppState>, from: String, to: String) -> CmdResult<PresetList> {
+pub fn rename_preset(
+    app: AppHandle,
+    state: State<AppState>,
+    from: String,
+    to: String,
+) -> CmdResult<PresetList> {
     let to = PresetStore::clean_name(&to).map_err(|e| e.to_string())?;
     state
         .presets
@@ -177,5 +200,7 @@ pub fn rename_preset(state: State<AppState>, from: String, to: String) -> CmdRes
     if was_current {
         set_current(&state, Some(to));
     }
+    // The neighbours of the current preset may have changed.
+    warm::refresh(&app);
     Ok(list(&state))
 }
