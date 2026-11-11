@@ -121,8 +121,19 @@ pub fn scan_path_in_process(format: &str, path: &Path) -> Result<Vec<PluginDescr
     Ok(infos.iter().map(PluginDescriptor::from_info).collect())
 }
 
+/// The flag that turns a program into a scanner child: `<program> --scan-plugins <format>`.
+const SCAN_FLAG: &str = "--scan-plugins";
+
+/// If this process was started as a scanner child, scan and return its exit code.
+/// Programs that can scan (the app, `gs-scan`) call this first thing in `main`.
+pub fn scan_child_from_args() -> Option<i32> {
+    let mut args = std::env::args().skip(1);
+    (args.next().as_deref() == Some(SCAN_FLAG))
+        .then(|| run_scan_child(args.next().as_deref().unwrap_or("")))
+}
+
 /// Entry point for the `--scan-plugins <format>` child process: prints JSON to stdout.
-pub fn run_scan_child(format: &str) -> i32 {
+fn run_scan_child(format: &str) -> i32 {
     match scan_format_in_process(format) {
         Ok(list) => {
             // Plugins sometimes write to stdout themselves; tag our line so the parent can find it.
@@ -209,7 +220,7 @@ pub fn scan_all_isolated(exe: &Path) -> (Vec<PluginDescriptor>, Vec<String>) {
             continue;
         }
         let mut command = Command::new(exe);
-        command.args(["--scan-plugins", format]);
+        command.args([SCAN_FLAG, format]);
         match output_within(command, SCAN_TIMEOUT) {
             Ok(None) => errors.push(format!(
                 "{format}: scan didn't finish within {} s and was stopped (a plugin may be waiting on a dialog)",
@@ -258,9 +269,14 @@ pub fn scan_all_isolated(exe: &Path) -> (Vec<PluginDescriptor>, Vec<String>) {
         };
         seen.insert(id)
     });
+    // Guitar Studio's own plugin would host itself.
+    all.retain(|p| !p.name.eq_ignore_ascii_case(OWN_PLUGIN));
     all.sort_by_key(|a| a.name.to_lowercase());
     (all, errors)
 }
+
+/// The name our own plugin (crates/gs-plugin) shows up under in scans.
+const OWN_PLUGIN: &str = "Guitar Studio";
 
 /// How the plugin's (fixed, post-activation) bus layout maps onto flat channels.
 #[derive(Debug, Clone)]

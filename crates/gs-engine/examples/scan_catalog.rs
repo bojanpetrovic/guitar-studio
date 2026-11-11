@@ -1,4 +1,4 @@
-//! cargo run -p gs-engine --example scan_catalog -- <app-binary> <out.json>
+//! cargo run -p gs-engine --example scan_catalog -- <scanner (gs-scan or the app)> <out.json>
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let t = std::time::Instant::now();

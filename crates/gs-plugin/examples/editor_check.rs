@@ -4,10 +4,12 @@
 //! lists the commands the page sends.
 //!
 //! cargo run -p gs-plugin --example editor_check -- "target/plugin/Guitar Studio.clap" [out.png] [seconds]
+mod common;
+
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use gs_engine::plugins::{load_plugin, scan_path_in_process};
+    use common::{load, pump, run};
     use objc2::{MainThreadMarker, MainThreadOnly};
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow,
@@ -15,27 +17,7 @@ fn main() -> anyhow::Result<()> {
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use std::path::Path;
-    use truce_rack::core::{AudioBuffer, EventList, ProcessContext, WindowHandle};
-
-    /// Run the main loop for `secs`, handling window events, like a DAW's event loop.
-    fn pump(secs: f64) {
-        use objc2_app_kit::{NSApplication, NSEventMask};
-        use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
-        let mtm = MainThreadMarker::new().expect("main thread");
-        let app = NSApplication::sharedApplication(mtm);
-        let until = NSDate::dateWithTimeIntervalSinceNow(secs);
-        // SAFETY: AppKit event loop calls on the main thread.
-        unsafe {
-            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-                NSEventMask::Any,
-                Some(&until),
-                NSDefaultRunLoopMode,
-                true,
-            ) {
-                app.sendEvent(&event);
-            }
-        }
-    }
+    use truce_rack::core::WindowHandle;
 
     let args: Vec<String> = std::env::args().collect();
     let bundle = Path::new(
@@ -47,17 +29,6 @@ fn main() -> anyhow::Result<()> {
         .cloned()
         .unwrap_or_else(|| "plugin-window.png".into());
     let seconds: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4.0);
-    let format = if bundle.extension().is_some_and(|e| e == "vst3") {
-        "vst3"
-    } else {
-        "clap"
-    };
-    let list = scan_path_in_process(format, bundle.parent().unwrap_or(Path::new(".")))?;
-    let desc = list
-        .iter()
-        .find(|p| p.name == "Guitar Studio" && Path::new(&p.path) == bundle)
-        .context("no Guitar Studio plugin there")?;
-
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
     // A regular, active app, like a DAW: WebKit holds back drawing in windows it
@@ -68,7 +39,7 @@ fn main() -> anyhow::Result<()> {
     app.activateIgnoringOtherApps(true);
     pump(0.2);
 
-    let mut slot = load_plugin(desc, 48_000.0, 1024)?;
+    let mut slot = load(bundle)?;
     let size = {
         let editor = slot.plugin.editor().context("no editor")?;
         editor.size().unwrap_or((1280, 800))
@@ -104,23 +75,9 @@ fn main() -> anyhow::Result<()> {
     println!("editor open at {size:?}");
 
     // Run audio (silence) and the main loop, as a DAW would.
-    let block = 256;
-    let input = vec![vec![0.0f32; block]; slot.io.total_in];
-    let mut output = vec![vec![0.0f32; block]; slot.io.total_out];
     let started = std::time::Instant::now();
     while started.elapsed().as_secs_f64() < seconds {
-        let ins: Vec<&[f32]> = input.iter().map(|v| &v[..]).collect();
-        let mut outs: Vec<&mut [f32]> = output.iter_mut().map(|v| &mut v[..]).collect();
-        let (bi, bo) = (slot.io.bus_in.clone(), slot.io.bus_out.clone());
-        let mut buf = AudioBuffer::new(&ins, &mut outs, block, &bi, &bo);
-        let mut events = EventList::new();
-        let mut ctx = ProcessContext {
-            sample_rate: 48_000.0,
-            max_block_size: 1024,
-            transport: None,
-            output_events: &mut events,
-        };
-        slot.plugin.process(&mut buf, &EventList::new(), &mut ctx)?;
+        run(&mut slot, 1, 0.0)?;
         pump(0.005);
     }
 

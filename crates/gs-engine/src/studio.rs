@@ -529,7 +529,8 @@ impl Studio {
                 }
             })
             .collect();
-        audio.send_schedule(Schedule::new(steps))
+        audio.send_schedule(Schedule::new(steps));
+        Ok(())
     }
 
     /// Set one field of a mixer strip: `"gainDb"` (-60..+12), `"pan"` (-1..1) or

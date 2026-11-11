@@ -7,8 +7,7 @@
 //! `GS_PLUGIN_DEV_URL` is set (e.g. `http://localhost:1420` under `npm run dev`).
 
 use crate::host::{Instance, Link, Ui};
-use gs_app::{App, CmdResult, main_thread};
-use serde::Deserialize;
+use gs_app::{App, CmdResult, Reply, Request, main_thread};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -94,14 +93,6 @@ struct Handler {
     link: Arc<Link>,
 }
 
-#[derive(Deserialize)]
-struct Request {
-    id: u64,
-    cmd: String,
-    #[serde(default)]
-    args: Value,
-}
-
 impl Handler {
     /// A message from the page (main thread).
     fn handle(&self, body: &str) {
@@ -113,7 +104,7 @@ impl Handler {
             return log::warn!("plugin window: {}", req.args["msg"].as_str().unwrap_or("?"));
         }
         log::debug!("plugin window → {}", req.cmd);
-        let reply = Reply {
+        let reply = ReplyTo {
             view: self.id,
             request: req.id,
         };
@@ -137,18 +128,15 @@ impl Handler {
 }
 
 /// Where a request's answer goes.
-struct Reply {
+struct ReplyTo {
     view: usize,
     request: u64,
 }
 
-impl Reply {
+impl ReplyTo {
     /// Always on a later main-loop turn: never from inside the webview's own callback.
     fn send(self, result: CmdResult<Value>) {
-        let body = match result {
-            Ok(ok) => serde_json::json!({ "id": self.request, "ok": ok }),
-            Err(err) => serde_json::json!({ "id": self.request, "err": err }),
-        };
+        let body = Reply::new(self.request, result).to_json();
         let script = format!("window.__gs&&window.__gs.reply({body})");
         let view = self.view;
         main_thread::run(move || run_script(view, &script));

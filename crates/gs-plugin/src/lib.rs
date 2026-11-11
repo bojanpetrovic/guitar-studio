@@ -48,8 +48,6 @@ pub struct GuitarStudio {
     /// The engine's audio side, while the DAW has us active.
     audio: Option<HostedAudio>,
     sample_rate: f64,
-    /// The DAW's input, copied out so outputs can be written while reading it.
-    inputs: [Vec<f32>; CHANNELS],
     /// Output gain applied at the end of the last block (ramped from, to the new one).
     gain: f32,
 }
@@ -104,9 +102,6 @@ impl PluginRuntime for GuitarStudio {
     fn reset(&mut self, config: &AudioConfig) {
         let block = config.max_block_size.max(1);
         self.sample_rate = config.sample_rate;
-        for input in &mut self.inputs {
-            input.resize(block, 0.0);
-        }
         let app = &self.instance.app;
         let rate = config.sample_rate.round() as u32;
         let started = app
@@ -129,49 +124,15 @@ impl PluginRuntime for GuitarStudio {
         context: &mut ProcessContext,
     ) -> ProcessStatus {
         let frames = buffer.num_samples();
-        let outs = buffer.num_output_channels().min(CHANNELS);
+        let (inputs, ins, mut outputs, outs) = channels(buffer, frames);
         let Some(audio) = &mut self.audio else {
-            for c in 0..outs {
-                buffer.output(c).fill(0.0);
-            }
+            outputs.iter_mut().for_each(|out| out.fill(0.0));
             return ProcessStatus::Normal;
         };
-        // More than the DAW promised at activation: play silence rather than allocate.
-        if frames > self.inputs[0].len() {
-            for c in 0..outs {
-                buffer.output(c).fill(0.0);
-            }
-            return ProcessStatus::Normal;
-        }
-        let ins = buffer.num_input_channels().min(CHANNELS);
-        for c in 0..CHANNELS {
-            let dst = &mut self.inputs[c][..frames];
-            if ins == 0 {
-                dst.fill(0.0);
-            } else {
-                // A mono track feeds both sides.
-                dst.copy_from_slice(&buffer.input(c.min(ins - 1))[..frames]);
-            }
-        }
-        let inputs: [&[f32]; CHANNELS] = [&self.inputs[0][..frames], &self.inputs[1][..frames]];
-
-        let mut raw: [(*mut f32, usize); CHANNELS] = [(std::ptr::null_mut(), 0); CHANNELS];
-        for (c, slot) in raw.iter_mut().enumerate().take(outs) {
-            let out = buffer.output(c);
-            *slot = (out.as_mut_ptr(), out.len().min(frames));
-        }
-        // SAFETY: each pointer is a different output channel of the DAW's buffer (they
-        // never overlap), valid for this block, and `buffer` isn't touched meanwhile.
-        let mut outputs: [&mut [f32]; CHANNELS] = raw.map(|(ptr, len)| {
-            if ptr.is_null() {
-                &mut [][..]
-            } else {
-                unsafe { std::slice::from_raw_parts_mut(ptr, len) }
-            }
-        });
+        // The engine reads a mono track into both sides and takes blocks of any length.
         let transport = host_transport(context.transport);
         audio.process(
-            &inputs[..],
+            &inputs[..ins],
             &mut outputs[..outs],
             frames,
             transport.as_ref(),
@@ -215,6 +176,49 @@ impl GuitarStudio {
     }
 }
 
+/// The DAW's first two input and output channels (`frames` long) side by side, with
+/// how many of each there are.
+fn channels<'a>(
+    buffer: &'a mut AudioBuffer<'_, f32>,
+    frames: usize,
+) -> (
+    [&'a [f32]; CHANNELS],
+    usize,
+    [&'a mut [f32]; CHANNELS],
+    usize,
+) {
+    let ins = buffer.num_input_channels().min(CHANNELS);
+    let outs = buffer.num_output_channels().min(CHANNELS);
+    let mut input: [(*const f32, usize); CHANNELS] = [(std::ptr::null(), 0); CHANNELS];
+    let mut output: [(*mut f32, usize); CHANNELS] = [(std::ptr::null_mut(), 0); CHANNELS];
+    for (c, slot) in input.iter_mut().enumerate().take(ins) {
+        let ch = buffer.input(c);
+        *slot = (ch.as_ptr(), ch.len().min(frames));
+    }
+    for (c, slot) in output.iter_mut().enumerate().take(outs) {
+        let ch = buffer.output(c);
+        *slot = (ch.as_mut_ptr(), ch.len().min(frames));
+    }
+    // SAFETY: these are distinct channels of the DAW's buffer, valid for this block, and
+    // `buffer` isn't used again while the slices live. No input aliases an output: we
+    // don't opt into in-place processing, so the wrapper copies such inputs aside.
+    let inputs = input.map(|(ptr, len)| {
+        if ptr.is_null() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        }
+    });
+    let outputs = output.map(|(ptr, len)| {
+        if ptr.is_null() {
+            &mut [][..]
+        } else {
+            unsafe { std::slice::from_raw_parts_mut(ptr, len) }
+        }
+    });
+    (inputs, ins, outputs, outs)
+}
+
 /// The DAW's transport, as hosted plugins expect it (`None` if it reports no tempo, in
 /// which case the metronome's is used).
 fn host_transport(t: &TransportInfo) -> Option<truce_rack::core::TransportInfo> {
@@ -245,7 +249,6 @@ impl PluginExport for GuitarStudio {
             meters: MeterStore::new(),
             audio: None,
             sample_rate: 48_000.0,
-            inputs: [Vec::new(), Vec::new()],
             gain: 1.0,
         }
     }

@@ -224,10 +224,9 @@ impl RunningAudio {
     }
 
     /// Hand a new graph to the audio thread (or keep it until there's room).
-    pub fn send_schedule(&mut self, schedule: Schedule) -> Result<()> {
+    pub fn send_schedule(&mut self, schedule: Schedule) {
         self.waiting = Some(Box::new(schedule));
         self.flush();
-        Ok(())
     }
 
     fn flush(&mut self) {
@@ -690,7 +689,7 @@ mod tests {
         let (mut running, mut hosted) =
             hosted(shared(), Schedule::empty(), tuner_tx, 48_000, 2, 64);
         for _ in 0..200 {
-            running.send_schedule(Schedule::empty()).unwrap();
+            running.send_schedule(Schedule::empty());
         }
         assert!(running.waiting.is_some(), "the newest graph waits for room");
         let input = vec![0.25f32; 64];

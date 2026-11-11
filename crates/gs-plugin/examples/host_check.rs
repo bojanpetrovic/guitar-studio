@@ -8,71 +8,15 @@
 //!
 //! `make plugin-test` runs it on `target/plugin/*`:
 //! cargo run -p gs-plugin --example host_check -- <bundle>… [--preset <file.json>]
+mod common;
+
 use anyhow::{Context, Result, bail};
-use gs_engine::plugins::{PluginSlot, load_plugin, scan_path_in_process};
+use common::{load, pump, run};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use truce::core::state::{deserialize_state, hash_plugin_id, serialize_state};
-use truce_rack::core::{AudioBuffer, EventList, ProcessContext};
 
-const SR: f64 = 48_000.0;
-const BLOCK: usize = 256;
 const INPUT_PEAK: f32 = 0.3;
-
-/// Let the main run loop spin, as a DAW's does: the plugin sets up restored rigs there.
-fn pump_main_loop(secs: f64) {
-    unsafe extern "C" {
-        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
-        fn CFRunLoopRunInMode(
-            mode: *const std::ffi::c_void,
-            seconds: f64,
-            return_after_source: u8,
-        ) -> i32;
-    }
-    // SAFETY: plain CoreFoundation call on the main thread.
-    unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, secs, 0) };
-}
-
-/// Process `blocks` blocks of a 110 Hz sine; returns the output peak.
-fn run(slot: &mut PluginSlot, blocks: usize) -> Result<f32> {
-    let sine: Vec<f32> = (0..BLOCK)
-        .map(|i| INPUT_PEAK * (i as f32 * std::f32::consts::TAU * 110.0 / SR as f32).sin())
-        .collect();
-    let input: Vec<Vec<f32>> = vec![sine; slot.io.total_in];
-    let mut out: Vec<Vec<f32>> = vec![vec![0.0; BLOCK]; slot.io.total_out];
-    let mut peak = 0.0f32;
-    for _ in 0..blocks {
-        let ins: Vec<&[f32]> = input.iter().map(|v| &v[..]).collect();
-        let mut outs: Vec<&mut [f32]> = out.iter_mut().map(|v| &mut v[..]).collect();
-        let (bi, bo) = (slot.io.bus_in.clone(), slot.io.bus_out.clone());
-        let mut buf = AudioBuffer::new(&ins, &mut outs, BLOCK, &bi, &bo);
-        let mut out_events = EventList::new();
-        let mut ctx = ProcessContext {
-            sample_rate: SR,
-            max_block_size: 1024,
-            transport: None,
-            output_events: &mut out_events,
-        };
-        slot.plugin.process(&mut buf, &EventList::new(), &mut ctx)?;
-        for ch in &out {
-            peak = peak.max(ch.iter().fold(0.0, |m, s| m.max(s.abs())));
-        }
-    }
-    Ok(peak)
-}
-
-fn load(format: &str, bundle: &Path) -> Result<PluginSlot> {
-    // Path scans walk a folder of bundles.
-    let folder = bundle.parent().unwrap_or(Path::new("."));
-    let list = scan_path_in_process(format, folder)?;
-    let desc = list
-        .iter()
-        .find(|p| p.name == "Guitar Studio" && Path::new(&p.path) == bundle)
-        .with_context(|| format!("no Guitar Studio plugin in {}", bundle.display()))?;
-    let slot = load_plugin(desc, SR, 1024)?;
-    pump_main_loop(0.1);
-    Ok(slot)
-}
 
 /// The rig inside a saved state, if it's a CLAP / truce envelope we can read.
 fn saved_rig(state: &[u8]) -> Option<String> {
@@ -87,10 +31,10 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
         _ => bail!("{}: not a .clap or .vst3 bundle", bundle.display()),
     };
     println!("== {format}: {}", bundle.display());
-    let mut a = load(format, bundle)?;
+    let mut a = load(bundle)?;
     println!("   loaded: {} in / {} out", a.io.main_in, a.io.main_out);
 
-    let peak = run(&mut a, 50)?;
+    let peak = run(&mut a, 50, INPUT_PEAK)?;
     println!("   passthrough peak {peak:.3} (input {INPUT_PEAK})");
     if (peak - INPUT_PEAK).abs() > 0.02 {
         bail!("the default rig should pass the input through");
@@ -101,14 +45,14 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
         .context("no Output parameter")?;
     let info = a.plugin.parameter_info(output)?;
     a.plugin.set_parameter(output, info.min)?; // -60 dB = silent
-    run(&mut a, 4)?;
-    let quiet = run(&mut a, 10)?;
+    run(&mut a, 4, INPUT_PEAK)?;
+    let quiet = run(&mut a, 10, INPUT_PEAK)?;
     println!("   Output at minimum: peak {quiet:.4}");
     if quiet > 0.001 {
         bail!("the Output parameter didn't turn the rig down");
     }
     a.plugin.set_parameter(output, info.default)?; // 0 dB
-    let back = run(&mut a, 10)?;
+    let back = run(&mut a, 10, INPUT_PEAK)?;
     if (back - INPUT_PEAK).abs() > 0.02 {
         bail!("the Output parameter didn't come back up (peak {back:.3})");
     }
@@ -121,13 +65,13 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
             bail!("saved state holds no rig: {rig:.200}");
         }
     }
-    let mut b = load(format, bundle)?;
+    let mut b = load(bundle)?;
     b.plugin.load_state(&state)?;
     for _ in 0..10 {
-        run(&mut b, 4)?;
-        pump_main_loop(0.05);
+        run(&mut b, 4, INPUT_PEAK)?;
+        pump(0.05);
     }
-    let restored = run(&mut b, 20)?;
+    let restored = run(&mut b, 20, INPUT_PEAK)?;
     println!("   restored into a second instance: peak {restored:.3}");
     if (restored - INPUT_PEAK).abs() > 0.02 {
         bail!("the restored instance should pass the input through");
@@ -165,8 +109,8 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
         // Restored state is re-saved from the live rig once it's up (compact JSON, so
         // it differs from the pretty preset file).
         loop {
-            run(&mut b, 4)?;
-            pump_main_loop(0.05);
+            run(&mut b, 4, INPUT_PEAK)?;
+            pump(0.05);
             let now = b.plugin.save_state()?;
             let live = saved_rig(&now).unwrap_or_default();
             if live.as_bytes() != extra.as_slice()
@@ -179,7 +123,7 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
             }
         }
         println!("   rig up in {:.1?}", t.elapsed());
-        let peak = run(&mut b, 200)?;
+        let peak = run(&mut b, 200, INPUT_PEAK)?;
         println!("   through the preset's rig: peak {peak:.3}");
         if peak < 0.001 || (peak - INPUT_PEAK).abs() < 0.005 {
             bail!("the preset's rig should change the sound");
@@ -187,7 +131,7 @@ fn check(bundle: &Path, preset: Option<&Path>) -> Result<()> {
     }
     drop(b);
     drop(a);
-    pump_main_loop(0.3);
+    pump(0.3);
     println!("   ok");
     Ok(())
 }

@@ -47,7 +47,7 @@ pub trait Shell: Send + Sync + 'static {
     /// Send an event to the UI (`catalog`, `warming`, `telemetry`, `sync`).
     fn emit(&self, event: &str, payload: Value);
     /// The program that scans plugins in a child process: it is run as
-    /// `<program> --scan-plugins <format>` (see `gs_engine::plugins::run_scan_child`).
+    /// `<program> --scan-plugins <format>` (see `gs_engine::plugins::scan_child_from_args`).
     fn scanner(&self) -> std::io::Result<PathBuf>;
 }
 
@@ -257,6 +257,11 @@ impl RigGuard {
         }
         Ok(Self(()))
     }
+
+    /// Whether a rig change is under way (on this thread).
+    pub fn busy() -> bool {
+        RIG_BUSY.with(std::cell::Cell::get)
+    }
 }
 
 impl Drop for RigGuard {
@@ -290,6 +295,39 @@ pub fn changes_state(cmd: &str) -> bool {
                 | "set_remote"
                 | "renew_remote_link"
         ))
+}
+
+/// A command as the phone and the plugin window send it: `{id, cmd, args}`.
+#[derive(Deserialize)]
+pub struct Request {
+    pub id: u64,
+    pub cmd: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
+/// The answer to a [`Request`]: `{id, ok}` or `{id, err}`.
+#[derive(Serialize)]
+pub struct Reply {
+    id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ok: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    err: Option<String>,
+}
+
+impl Reply {
+    pub fn new(id: u64, result: CmdResult<Value>) -> Self {
+        let (ok, err) = match result {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e)),
+        };
+        Self { id, ok, err }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
 }
 
 /// The UI's arguments: a JSON object with camelCase names.
@@ -482,7 +520,7 @@ fn scan_plugins(app: &Arc<App>) -> CmdResult<Catalog> {
         .scanner()
         .map(|exe| plugins::scan_all_isolated(&exe))
         .map_err(|e| format!("couldn't start the plugin scanner: {e}"));
-    let (mut found, errors) = match scanned {
+    let (plugins, errors) = match scanned {
         Ok(found) => found,
         Err(e) => {
             // Keep the old list; never leave the catalog stuck "scanning".
@@ -496,10 +534,8 @@ fn scan_plugins(app: &Arc<App>) -> CmdResult<Catalog> {
             return Err(e);
         }
     };
-    // Guitar Studio's own plugin would host itself.
-    found.retain(|p| !is_guitar_studio(p));
     let catalog = Catalog {
-        plugins: found,
+        plugins,
         errors,
         scanned_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -513,11 +549,6 @@ fn scan_plugins(app: &Arc<App>) -> CmdResult<Catalog> {
     *app.catalog.lock() = catalog.clone();
     app.emit("catalog", &catalog);
     Ok(catalog)
-}
-
-/// Our own plugin, as it shows up in a scan.
-fn is_guitar_studio(p: &PluginDescriptor) -> bool {
-    p.name.eq_ignore_ascii_case("Guitar Studio")
 }
 
 fn add_plugin_node(app: &Arc<App>, key: &str, x: f32, y: f32) -> CmdResult<(u32, StudioView)> {
@@ -586,6 +617,18 @@ mod tests {
         assert!(!changes_state("set_plugin_param"));
         assert!(!changes_state("remote_sync"));
         assert!(!changes_state("preset_ready"));
+    }
+
+    #[test]
+    fn replies_carry_either_ok_or_err() {
+        assert_eq!(
+            Reply::new(7, Ok(Value::Null)).to_json(),
+            r#"{"id":7,"ok":null}"#
+        );
+        assert_eq!(
+            Reply::new(8, Err("no".into())).to_json(),
+            r#"{"id":8,"err":"no"}"#
+        );
     }
 
     #[test]

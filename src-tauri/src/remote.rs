@@ -18,7 +18,7 @@ use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
-use gs_app::{changes_state, err};
+use gs_app::{Reply, Request, changes_state, err};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -331,23 +331,6 @@ async fn open_socket(
 
 // ---------------------------------------------------------------- websocket
 
-#[derive(Deserialize)]
-struct Request {
-    id: u64,
-    cmd: String,
-    #[serde(default)]
-    args: Value,
-}
-
-#[derive(Serialize)]
-struct Reply {
-    id: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ok: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    err: Option<String>,
-}
-
 async fn session(socket: WebSocket, ctx: Ctx, allowed: bool) {
     let (mut tx, mut rx) = socket.split();
     if !allowed {
@@ -411,7 +394,7 @@ async fn session(socket: WebSocket, ctx: Ctx, allowed: bool) {
 async fn handle(ctx: &Ctx, text: &str) -> String {
     let req: Request = match serde_json::from_str(text) {
         Ok(r) => r,
-        Err(e) => return format!(r#"{{"id":0,"err":{}}}"#, Value::String(e.to_string())),
+        Err(e) => return Reply::new(0, Err(e.to_string())).to_json(),
     };
     // Plugins expect to be driven from the main thread, like the desktop's commands.
     let (done, result) = oneshot::channel();
@@ -428,16 +411,7 @@ async fn handle(ctx: &Ctx, text: &str) -> String {
     if result.is_ok() && changes_state(&req.cmd) {
         ctx.hub.phone_changed();
     }
-    let (ok, err) = match result {
-        Ok(v) => (Some(v), None),
-        Err(e) => (None, Some(e)),
-    };
-    serde_json::to_string(&Reply {
-        id: req.id,
-        ok,
-        err,
-    })
-    .unwrap_or_default()
+    Reply::new(req.id, result).to_json()
 }
 
 /// The commands a phone may run: everything needed to play the board, nothing that

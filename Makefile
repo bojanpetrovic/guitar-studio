@@ -2,7 +2,6 @@
 
 SHELL        := /bin/bash
 APP_DATA     := $(HOME)/Library/Application Support/dev.guitarstudio.app
-DEBUG_BIN    := target/debug/guitar-studio
 PLUGIN_DIR   := $(HOME)/Library/Audio/Plug-Ins
 # Some Command Line Tools installs leave an incomplete C++ header folder that shadows the
 # SDK's (the VST3 wrapper compiles C++); point the compiler at the SDK's headers then.
@@ -115,9 +114,9 @@ params: ## List a plugin's parameters and ids, e.g. make params FORMAT=au PLUGIN
 	cargo run -q -p gs-engine --example list_params -- $(FORMAT) "$(PLUGIN)"
 
 scan: ## Rescan all plugins (crash-isolated) into the app's cache
-	cargo build -p guitar-studio
+	cargo build -p gs-engine --bin gs-scan
 	@mkdir -p "$(APP_DATA)"
-	cargo run -q -p gs-engine --example scan_catalog -- "$(CURDIR)/$(DEBUG_BIN)" "$(APP_DATA)/plugins.json"
+	cargo run -q -p gs-engine --example scan_catalog -- "$(CURDIR)/target/debug/gs-scan" "$(APP_DATA)/plugins.json"
 
 # ---------------------------------------------------------------- housekeeping
 

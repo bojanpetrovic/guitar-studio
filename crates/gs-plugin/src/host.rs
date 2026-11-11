@@ -2,7 +2,7 @@
 //! the DAW, its link to the plugin window, and the rig saved with the DAW's project.
 
 use crate::bundle;
-use gs_app::{App, Shell, main_thread, presets};
+use gs_app::{App, RigGuard, Shell, main_thread, presets};
 use gs_engine::presets::Patch;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,12 @@ fn pump(app: &Arc<App>, link: &Arc<Link>, tick: u32) {
 
 /// Main thread: set up a rig the DAW restored.
 fn apply_restored(app: &Arc<App>, link: &Arc<Link>, data: Vec<u8>) {
+    if RigGuard::busy() {
+        // A rig change is under way; try again on the next tick.
+        *link.restored.lock() = Some(data);
+        link.has_restored.store(true, Ordering::Release);
+        return;
+    }
     let saved: SavedRig = match serde_json::from_slice(&data) {
         Ok(s) if is_ours(&s) => s,
         Ok(_) => return log::warn!("ignoring saved state that isn't a Guitar Studio rig"),
@@ -201,11 +207,6 @@ fn apply_restored(app: &Arc<App>, link: &Arc<Link>, data: Vec<u8>) {
             app.emit("sync", &app.sync_state());
             // Save it again from the live rig (plugins may have adjusted their state).
             link.dirty.store(true, Ordering::Relaxed);
-        }
-        Err(e) if e.starts_with("Still loading") => {
-            // A rig change is under way; try again on the next tick.
-            *link.restored.lock() = Some(data);
-            link.has_restored.store(true, Ordering::Release);
         }
         Err(e) => log::error!("couldn't restore the rig: {e}"),
     }
