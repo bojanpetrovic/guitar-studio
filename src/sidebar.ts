@@ -1,33 +1,38 @@
-// The plugin sidebar's open / closed state (⌘B or the title bar button), remembered
-// per window.
+// The two side panels — presets on the left, plugins on the right — and whether each
+// is open (title bar buttons, ⌘P / ⌘B). Remembered per window.
 import { useSyncExternalStore } from "react";
 
-const KEY = "gs.sidebar";
+export type Side = "left" | "right";
 
-function stored() {
+const key = (side: Side) => `gs.sidebar.${side}`;
+
+function stored(side: Side) {
   try {
-    return localStorage.getItem(KEY) !== "closed";
+    return localStorage.getItem(key(side)) !== "closed";
   } catch {
     return true;
   }
 }
 
-let open = stored();
+const open: Record<Side, boolean> = { left: stored("left"), right: stored("right") };
 const listeners = new Set<() => void>();
 
-export function toggleSidebar() {
-  open = !open;
+export function setSidebar(side: Side, on: boolean) {
+  if (open[side] === on) return;
+  open[side] = on;
   try {
-    localStorage.setItem(KEY, open ? "open" : "closed");
+    localStorage.setItem(key(side), on ? "open" : "closed");
   } catch {
     /* not remembered: fine */
   }
   listeners.forEach((l) => l());
 }
 
+export const toggleSidebar = (side: Side) => setSidebar(side, !open[side]);
+
 const subscribe = (l: () => void) => {
   listeners.add(l);
   return () => void listeners.delete(l);
 };
 
-export const useSidebarOpen = () => useSyncExternalStore(subscribe, () => open);
+export const useSidebarOpen = (side: Side) => useSyncExternalStore(subscribe, () => open[side]);

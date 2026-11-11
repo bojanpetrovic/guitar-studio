@@ -16,6 +16,7 @@ import { ActionsContext, AudioContext, CatalogContext, Ctx, Pos, StudioActions, 
 import { clampBpm } from "./util";
 import TitleBar from "./components/TitleBar";
 import PluginBrowser from "./components/PluginBrowser";
+import PresetBrowser from "./components/PresetBrowser";
 import GraphCanvas from "./components/GraphCanvas";
 import Dock from "./components/Dock";
 import SettingsDialog from "./components/SettingsDialog";
@@ -502,16 +503,20 @@ export default function App() {
   );
 }
 
-/** The desktop window: title bar, plugin list, rig or pedalboard, and the dock. */
+/** The desktop window: title bar, presets (left), rig or pedalboard, plugins (right), and the dock. */
 function Desktop({ view, stage }: { view: View; stage: boolean }) {
-  const sidebar = useSidebarOpen();
+  const left = useSidebarOpen("left");
+  const right = useSidebarOpen("right");
   return (
-    <div className={`app view-${view} ${stage ? "stage-mode" : ""} ${sidebar ? "" : "sidebar-closed"}`}>
+    <div className={`app view-${view} ${stage ? "stage-mode" : ""} ${left ? "" : "left-closed"} ${right ? "" : "right-closed"}`}>
       <TitleBar />
       <aside className="sidebar left">
-        <PluginBrowser />
+        <PresetBrowser />
       </aside>
       <main className="stage">{view === "rig" ? <GraphCanvas /> : <PedalboardView />}</main>
+      <aside className="sidebar right">
+        <PluginBrowser />
+      </aside>
       <Dock />
     </div>
   );

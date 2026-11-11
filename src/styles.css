@@ -251,12 +251,15 @@ select {
 .app {
   height: 100%;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  /* Presets on the left, plugins on the right; each closes to 0 (see below). */
+  --left-w: 270px;
+  --right-w: 300px;
+  grid-template-columns: var(--left-w) 1fr var(--right-w);
   grid-template-rows: 56px 1fr auto;
   grid-template-areas:
-    "title title"
-    "left stage"
-    "left dock";
+    "title title title"
+    "left stage right"
+    "left dock right";
   background: radial-gradient(1200px 600px at 50% -10%, rgb(var(--accent-rgb) / 0.06), transparent 60%), var(--bg);
 }
 
@@ -309,23 +312,39 @@ select {
   grid-area: left;
   border-right: 1px solid var(--line);
 }
-/* Closing the plugin list slides it shut (⌘B; the pedalboard view always closes it). */
+.sidebar.right {
+  grid-area: right;
+  border-left: 1px solid var(--line);
+}
+/* Side panels slide shut (title bar buttons, ⌘P / ⌘B). Their content keeps its width
+   while the column narrows, so it slides rather than reflows. */
 .app {
   transition: grid-template-columns 0.2s ease;
 }
 .sidebar.left > .browser {
+  width: 270px;
+  flex: none;
+}
+.sidebar.right > .browser {
   width: 300px;
   flex: none;
 }
-.app.sidebar-closed {
-  grid-template-columns: 0 1fr;
+.app.left-closed {
+  --left-w: 0px;
 }
-.app.sidebar-closed .sidebar.left {
+/* The pedalboard has no use for the plugin list. */
+.app.right-closed,
+.app.view-board {
+  --right-w: 0px;
+}
+.app.left-closed .sidebar.left,
+.app.right-closed .sidebar.right,
+.app.view-board .sidebar.right {
   visibility: hidden;
   border: 0;
   transition: visibility 0s 0.2s;
 }
-.titlebar .sidebar-toggle {
+.titlebar .sidebar-toggle.left {
   margin: 0 -8px;
 }
 .stage {
@@ -1276,8 +1295,7 @@ select {
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
-.preset-trigger:hover,
-.preset-trigger.open {
+.preset-trigger:hover {
   border-color: var(--line-2);
   background: var(--panel-2);
 }
@@ -1290,14 +1308,6 @@ select {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.preset-trigger .chev {
-  color: var(--muted);
-  flex: none;
-  transition: transform 0.15s;
-}
-.preset-trigger.open .chev {
-  transform: rotate(180deg);
 }
 
 .popover {
@@ -1312,28 +1322,12 @@ select {
   backdrop-filter: blur(20px);
   animation: pop 0.14s ease-out;
 }
-.preset-pop {
-  width: 340px;
-  display: flex;
-  flex-direction: column;
-}
 .pop-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 12px 14px 6px;
   font-size: 12px;
-}
-.preset-list {
-  max-height: 360px;
-  overflow-y: auto;
-  padding: 4px 6px;
-}
-.pop-empty {
-  padding: 18px 10px;
-  color: var(--muted);
-  text-align: center;
-  line-height: 1.5;
 }
 .preset-row {
   display: flex;
@@ -1346,7 +1340,23 @@ select {
 }
 .preset-row:hover,
 .preset-row:focus-visible {
-  background: var(--panel-3);
+  background: var(--panel);
+}
+.preset-row.active {
+  background: var(--accent-soft);
+}
+.preset-row.editing,
+.preset-row.confirm {
+  cursor: default;
+  background: var(--panel);
+  flex: none;
+}
+.preset-row.editing .text-input {
+  flex: 1;
+  height: 32px;
+}
+.preset-row.confirm .preset-row-name {
+  color: var(--red);
 }
 .preset-row.active .preset-row-name {
   color: var(--accent);
@@ -1390,28 +1400,32 @@ select {
   width: 26px;
   height: 26px;
 }
-.pop-foot {
+/* The presets panel: header buttons, and the "Save as" / "New rig" forms under them. */
+.panel-head-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--line);
+  gap: 4px;
 }
-.pop-form {
+.panel-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-2);
+  background: var(--panel);
 }
-.pop-actions {
+.panel-form-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
-.pop-warn {
+.panel-warn {
   margin: 0;
   color: var(--text-2);
   line-height: 1.5;
+}
+.presets-list .preset-row {
+  flex: none;
 }
 .text-input {
   height: 36px;
@@ -1446,14 +1460,6 @@ select {
   align-items: center;
   gap: 6px;
   padding: 0 10px;
-}
-/* The plugin browser isn't needed on the pedalboard: give the board the room. */
-.app.view-board {
-  grid-template-columns: 0 1fr;
-}
-.app.view-board .sidebar.left {
-  visibility: hidden;
-  border: 0;
 }
 
 /* ============================================================ pedalboard shell */

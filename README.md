@@ -16,8 +16,9 @@ The first launch has no plugin list. Click the refresh icon in the Plugins panel
 Each format is scanned in its own child process, so a crashing plugin can't take the app
 down. A full scan takes about a minute and the results are cached.
 
-The plugin list opens and closes with the button next to the logo (or ⌘B). Star a
-plugin (☆ on hover) to keep it in **Favourites** at the top of the list. Favourites
+The plugin list sits on the right; show or hide it with the button at the right end of
+the title bar (or ⌘B). Star a plugin (☆ on hover) to keep it in **Favourites** at the
+top of the list. Favourites
 also come first in "Replace with…", and the desktop app and the DAW plugin share them.
 
 ## Replacing a plugin
@@ -37,7 +38,9 @@ blob a DAW stores, so settings you dial in inside a plugin's editor come back
 exactly.
 
 - **⌘S** saves to the current preset (or asks for a name). **⇧⌘S** saves as a new one.
-- The preset menu next to the logo loads, renames and deletes presets, and starts a new empty rig.
+- The **Presets panel** on the left lists every preset: click one to load it, search by
+  name or plugin, rename or delete on hover, *Save as…* and *New rig* at the top. Show
+  or hide it with the button next to the logo, the preset name in the title bar, or ⌘P.
 - On launch, the app reloads the preset you last had open.
 - Presets are plain JSON files in `~/Library/Application Support/dev.guitarstudio.app/presets/`.
   You can back them up or copy them between machines.
