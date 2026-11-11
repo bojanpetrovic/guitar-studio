@@ -106,7 +106,7 @@ function candidates(kind: BindingKind, nodes: NodeView[]) {
     case "param":
       return nodes.filter((n) => n.kind === "plugin");
     case "bypass":
-      return nodes.filter((n) => n.kind === "plugin" || n.kind === "gain");
+      return nodes.filter((n) => n.kind === "plugin" || n.kind === "gain" || n.kind === "output");
     case "mix":
       return nodes.filter((n) => n.kind === "mixer");
     case "level":

@@ -414,6 +414,14 @@ impl Studio {
         Ok(())
     }
 
+    /// Is the master output muted (the Output node's on/off flag)?
+    pub fn output_muted(&self) -> bool {
+        self.nodes
+            .values()
+            .find(|n| n.kind == NodeType::Output)
+            .is_some_and(|n| n.shared.bypass.load(Ordering::Relaxed))
+    }
+
     pub fn set_bypass(&mut self, id: NodeId, bypass: bool) -> Result<()> {
         let node = self.nodes.get(&id).ok_or_else(|| anyhow!("no node {id}"))?;
         node.shared.bypass.store(bypass, Ordering::Relaxed);
@@ -440,7 +448,8 @@ impl Studio {
                 let node = &self.nodes[id];
                 let processor: Box<dyn Processor> = match node.kind {
                     NodeType::Input => Box::new(InputNode::new(node.shared.clone())),
-                    NodeType::Output | NodeType::Gain | NodeType::Mixer => {
+                    NodeType::Output => Box::new(GainNode::output(node.shared.clone())),
+                    NodeType::Gain | NodeType::Mixer => {
                         Box::new(GainNode::new(node.shared.clone()))
                     }
                     NodeType::Plugin => Box::new(PluginNode::new(
@@ -622,6 +631,7 @@ impl Studio {
         mut slots: HashMap<NodeId, SharedPlugin>,
     ) -> Result<Vec<SharedPlugin>> {
         // Instances the new rig reuses aren't "old".
+        let was_muted = self.output_muted();
         let old: Vec<SharedPlugin> = std::mem::take(&mut self.nodes)
             .into_values()
             .filter_map(|n| n.plugin)
@@ -647,7 +657,14 @@ impl Studio {
             have_output |= n.kind == NodeType::Output;
             self.insert_node_with_id(n.id, n.kind, n.x, n.y, n.gain_db, plugin);
             let shared = &self.nodes[&n.id].shared;
-            shared.bypass.store(n.bypass, Ordering::Relaxed);
+            // The output's mute is a live control, not part of a sound: a preset load
+            // never mutes or unmutes you.
+            let bypass = if n.kind == NodeType::Output {
+                was_muted
+            } else {
+                n.bypass
+            };
+            shared.bypass.store(bypass, Ordering::Relaxed);
             shared.channel.store(n.channel, Ordering::Relaxed);
             if n.kind == NodeType::Input {
                 self.tuner_channel.store(n.channel, Ordering::Relaxed);
@@ -657,7 +674,11 @@ impl Studio {
             self.insert_node(NodeType::Input, 0.0, 0.0, 0.0, None);
         }
         if !have_output {
-            self.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
+            let id = self.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
+            self.nodes[&id]
+                .shared
+                .bypass
+                .store(was_muted, Ordering::Relaxed);
         }
 
         // Re-add cables through `connect`'s rules; anything invalid is skipped.
@@ -1152,6 +1173,34 @@ mod tests {
         assert_eq!(t.view().active_scene, s.view().active_scene);
         t.reset_graph().unwrap();
         assert!(t.view().scenes.is_empty());
+    }
+
+    #[test]
+    fn output_mute_survives_preset_loads() {
+        let mut s = Studio::new();
+        let (patch, _) = s.to_patch("Unmuted"); // saved with the output on
+        let out = s
+            .view()
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeType::Output)
+            .unwrap()
+            .id;
+        s.set_bypass(out, true).unwrap();
+        assert!(s.output_muted());
+        s.apply_patch(&patch, HashMap::new()).unwrap();
+        assert!(s.output_muted(), "loading a preset doesn't unmute");
+        s.reset_graph().unwrap();
+        assert!(s.output_muted(), "nor does a new rig");
+        let out = s
+            .view()
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeType::Output)
+            .unwrap()
+            .id;
+        s.set_bypass(out, false).unwrap();
+        assert!(!s.output_muted());
     }
 
     #[test]

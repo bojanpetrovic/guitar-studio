@@ -127,7 +127,7 @@ export const WIDGET_META: Record<
 export const BINDING_LABEL: Record<BindingKind, string> = {
   none: "Nothing",
   param: "Plugin parameter",
-  bypass: "Bypass on/off",
+  bypass: "On/off (or output mute)",
   level: "Level (dB)",
   mix: "Mixer channel",
   meter: "Signal level",

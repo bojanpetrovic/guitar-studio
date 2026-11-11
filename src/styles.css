@@ -3210,3 +3210,20 @@ html.remote-mode body {
   background: rgb(var(--accent-rgb) / 0.82);
   pointer-events: none;
 }
+
+/* ============================================================ output mute */
+.mute-btn.on,
+.mute-btn.on:hover:not(:disabled) {
+  color: var(--red);
+  border-color: rgb(var(--red-rgb) / 0.5);
+  background: rgb(var(--red-rgb) / 0.14);
+}
+.gs-node.muted {
+  border-color: rgb(var(--red-rgb) / 0.55);
+}
+.gs-node.muted::before {
+  background: var(--red);
+}
+.gs-node.muted .node-meter {
+  opacity: 0.35;
+}

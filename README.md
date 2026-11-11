@@ -108,6 +108,14 @@ under the board* hides it there).
 - Switching only sets the parameters that differ, a parameter at a time, so the audio
   keeps running (Archetype Nolly: ~11 ms; Pro-Q 3 / Timeless 3: ~1 ms).
 
+## Muting the output
+
+The speaker button next to the OUT meter (also on the Main Out node and in the phone's
+header) mutes the main output, fading out in a few milliseconds so it doesn't click.
+Mute is a live control, not part of a sound: loading a preset or scene leaves it as
+it is. A pedalboard footswitch can do it too: bind it to *On/off* on Main Out (lit
+while the sound is on).
+
 ## Phone remote
 
 Play the pedalboard from your phone. Click the phone icon in the title bar, switch on

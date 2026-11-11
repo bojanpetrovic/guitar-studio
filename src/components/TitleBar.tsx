@@ -8,6 +8,7 @@ import Logo from "./Logo";
 import PresetMenu from "./PresetMenu";
 import ThemeMenu from "./ThemeMenu";
 import PhoneMenu from "./PhoneMenu";
+import MuteButton from "./MuteButton";
 
 function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
@@ -97,6 +98,7 @@ export default function TitleBar() {
           <span className="micro-label">OUT</span>
           <Meter id="master" />
         </div>
+        <MuteButton />
         <PhoneMenu />
         <ThemeMenu />
         <button className="icon-btn" onClick={actions.openSettings} aria-label="Audio settings">

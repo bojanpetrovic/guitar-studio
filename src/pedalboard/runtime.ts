@@ -218,11 +218,13 @@ export function useResolved(w: Widget): Resolved {
       const n = studio.nodes.find((x) => x.id === b.node);
       if (!n) return { ...BASE, target: "Missing node" };
       const active = !n.bypass;
+      // On the output the switch is a mute: lit while sound is on.
+      const output = n.kind === "output";
       return {
         ...BASE,
         ok: true,
-        target: `${nodeName(b.node)} · on/off`,
-        display: active ? "ON" : "OFF",
+        target: `${nodeName(b.node)} · ${output ? "mute" : "on/off"}`,
+        display: active ? "ON" : output ? "MUTED" : "OFF",
         on: active,
         toggle: () => actions.setBypass(n.id, !n.bypass),
         press: () => actions.setBypass(n.id, false),

@@ -91,3 +91,11 @@ export function usePresetStep() {
   const { presets, actions } = useStudio();
   return { step: actions.stepPreset, count: presets.presets.length, current: presets.current };
 }
+
+/** The main output's mute (the Output node's on/off flag). */
+export function useOutputMute() {
+  const { studio, actions } = useStudio();
+  const out = studio.nodes.find((n) => n.kind === "output");
+  const muted = !!out?.bypass;
+  return { muted, toggle: () => out && actions.setBypass(out.id, !muted) };
+}

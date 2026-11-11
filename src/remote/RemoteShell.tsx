@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RotateCw, WifiOff } from "lucide-react";
 import Dock from "../components/Dock";
 import Logo from "../components/Logo";
+import MuteButton from "../components/MuteButton";
 import PedalboardView from "../pedalboard/PedalboardView";
 import { Link, useLink } from "../transport";
 import { usePresetStep, useStudio } from "../studio";
@@ -84,6 +85,7 @@ export default function RemoteShell() {
         <button className="icon-btn" onClick={() => step(1)} disabled={count === 0} aria-label="Next preset">
           <ChevronRight size={20} />
         </button>
+        <MuteButton className="ghost" />
         {fs.supported && (
           <button className="icon-btn ghost remote-fs" onClick={fs.toggle} aria-label={fs.on ? "Exit full screen" : "Full screen"}>
             {fs.on ? <Minimize2 size={17} /> : <Maximize2 size={17} />}

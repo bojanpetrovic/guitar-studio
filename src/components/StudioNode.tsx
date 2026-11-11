@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Handle, NodeProps, Position } from "@xyflow/react";
-import { AudioWaveform, Blend, Cable, ExternalLink, Power, Replace, Speaker, SlidersHorizontal, Trash2 } from "lucide-react";
+import { AudioWaveform, Blend, Cable, ExternalLink, Power, Replace, Speaker, SlidersHorizontal, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useActions, useAudioStatus } from "../studio";
 import { formatDb } from "../util";
 import { formatLabel } from "../api";
@@ -35,7 +35,7 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
 
   return (
     <div
-      className={`gs-node kind-${n.kind} ${n.bypass ? "bypassed" : ""} ${selected ? "selected" : ""}`}
+      className={`gs-node kind-${n.kind} ${n.bypass ? (n.kind === "output" ? "muted" : "bypassed") : ""} ${selected ? "selected" : ""}`}
       style={n.kind === "mixer" ? { width: Math.max(240, 28 + n.strips.length * 74) } : undefined}
     >
       {n.kind !== "input" && <Handle type="target" position={Position.Left} className="port in" />}
@@ -72,6 +72,20 @@ function StudioNode({ data, selected }: NodeProps<StudioFlowNode>) {
         {(n.kind === "gain" || n.kind === "output" || n.kind === "mixer") && (
           <Fader label={n.kind === "output" ? "Master" : n.kind === "mixer" ? "Mix level" : "Level"} unit="dB" min={-60} max={n.kind === "output" ? 12 : 24}
             value={n.gainDb} format={formatDb} resetTo={0} onChange={(v) => actions.setParam(n.id, "gainDb", v)} />
+        )}
+
+        {n.kind === "output" && (
+          <div className="node-actions nodrag">
+            <span className="spacer" />
+            <button
+              className={`btn small mute-btn ${n.bypass ? "on" : ""}`}
+              onClick={() => actions.setBypass(n.id, !n.bypass)}
+              aria-pressed={n.bypass}
+              title={n.bypass ? "Unmute the output" : "Mute the output"}
+            >
+              {n.bypass ? <VolumeX size={13} /> : <Volume2 size={13} />} {n.bypass ? "Muted" : "Mute"}
+            </button>
+          </div>
         )}
 
         {n.kind === "plugin" && n.plugin && (

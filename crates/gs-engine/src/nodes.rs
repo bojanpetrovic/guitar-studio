@@ -107,22 +107,39 @@ impl Processor for InputNode {
 pub struct GainNode {
     pub shared: Arc<NodeShared>,
     gain: f32,
+    /// The Output node: its on/off flag mutes (fading out over one block) instead of
+    /// bypassing.
+    mutes: bool,
 }
 
 impl GainNode {
     pub fn new(shared: Arc<NodeShared>) -> Self {
         let gain = shared.gain.load();
-        Self { shared, gain }
+        Self {
+            shared,
+            gain,
+            mutes: false,
+        }
+    }
+
+    /// The master output: `bypass` means muted.
+    pub fn output(shared: Arc<NodeShared>) -> Self {
+        Self {
+            mutes: true,
+            ..Self::new(shared)
+        }
     }
 }
 
 impl Processor for GainNode {
     fn process(&mut self, _ctx: &ProcessCtx, input: [&[f32]; 2], output: [&mut [f32]; 2]) {
-        if self.shared.bypass.load(Ordering::Relaxed) {
+        let off = self.shared.bypass.load(Ordering::Relaxed);
+        if off && !self.mutes {
             copy_through(input, output);
             return;
         }
-        apply_gain(&mut self.gain, self.shared.gain.load(), input, output);
+        let target = if off { 0.0 } else { self.shared.gain.load() };
+        apply_gain(&mut self.gain, target, input, output);
     }
 }
 
@@ -283,5 +300,52 @@ fn lock_briefly(
         if start.elapsed() > LOCK_WAIT {
             return None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(node: &mut GainNode) -> (Vec<f32>, Vec<f32>) {
+        let ctx = ProcessCtx {
+            sample_rate: 48_000.0,
+            frames: 64,
+            hw_input: &[],
+            transport: Default::default(),
+        };
+        let input = vec![1.0f32; 64];
+        let (mut l, mut r) = (vec![0.0; 64], vec![0.0; 64]);
+        node.process(&ctx, [&input, &input], [&mut l, &mut r]);
+        (l, r)
+    }
+
+    #[test]
+    fn output_mute_fades_to_silence_but_gain_bypass_passes_through() {
+        let out_shared = NodeShared::new(1.0);
+        let mut out = GainNode::output(out_shared.clone());
+        out_shared.bypass.store(true, Ordering::Relaxed);
+        let (l, _) = block(&mut out);
+        assert!(
+            l[0] > 0.9 && l[63].abs() < 1e-6,
+            "fades over one block, no click"
+        );
+        let (l, r) = block(&mut out);
+        assert!(l.iter().chain(&r).all(|s| *s == 0.0), "then silent");
+        out_shared.bypass.store(false, Ordering::Relaxed);
+        let (l, _) = block(&mut out);
+        assert!(
+            l[0] < 0.1 && (l[63] - 1.0).abs() < 1e-6,
+            "and fades back in"
+        );
+
+        let gain_shared = NodeShared::new(0.25);
+        let mut gain = GainNode::new(gain_shared.clone());
+        gain_shared.bypass.store(true, Ordering::Relaxed);
+        let (l, _) = block(&mut gain);
+        assert!(
+            l.iter().all(|s| *s == 1.0),
+            "a bypassed Gain passes the signal as-is"
+        );
     }
 }
