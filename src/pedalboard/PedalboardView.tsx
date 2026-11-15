@@ -478,7 +478,13 @@ export default function PedalboardView() {
       );
       const width = modeParam ? 400 : 260;
       const panel = makeWidget("panel", x, 30);
-      Object.assign(panel, { w: width, h: 350, color: ENCLOSURES[i % ENCLOSURES.length], label: (p.plugin?.name ?? "Pedal").toUpperCase().slice(0, 22) });
+      Object.assign(panel, {
+        w: width,
+        h: 350,
+        color: ENCLOSURES[i % ENCLOSURES.length],
+        label: (p.plugin?.name ?? "Pedal").toUpperCase().slice(0, 22),
+        binding: { kind: "bypass", node: p.id },
+      });
       widgets.push(panel);
       knobs.forEach((q, k) => {
         const knob = makeWidget("knob", x + 30 + k * 110, 60);

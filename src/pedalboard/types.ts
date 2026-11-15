@@ -31,6 +31,8 @@ export interface WidgetOptions {
   labels?: string[];
   /** Label: text size in px. */
   fontSize?: number;
+  /** Pedal: the enclosure's finish (see PEDAL_FINISHES; "classic" when unset). */
+  finish?: PedalFinish;
   /**
    * Keyboard key (KeyboardEvent.code, e.g. "KeyA") that plays this control in play
    * mode: switches press; knobs / faders / selectors are selected, then nudged with ↑ / ↓.
@@ -51,6 +53,22 @@ export interface Widget {
   binding: Binding;
   options: WidgetOptions;
 }
+
+/** Pedal enclosure finishes (styled in styles.css as `.finish-<id>`). Animated ones run
+ *  while the pedal is on (when it follows a plugin's on/off) and hold still with Reduce
+ *  Motion on. */
+export const PEDAL_FINISHES = [
+  { id: "classic", label: "Classic" },
+  { id: "brushed", label: "Brushed" },
+  { id: "hammered", label: "Hammered" },
+  { id: "vintage", label: "Vintage" },
+  { id: "flake", label: "Flake" },
+  { id: "neon", label: "Neon", animated: true },
+  { id: "holo", label: "Holo", animated: true },
+  { id: "scope", label: "Scope", animated: true },
+  { id: "lava", label: "Lava", animated: true },
+] as const;
+export type PedalFinish = (typeof PEDAL_FINISHES)[number]["id"];
 
 /** Board backgrounds (styled in styles.css as `.surface-<id>`). Animated ones draw on
  *  a `.pb-surface` layer under the controls (`particles`: on a canvas, see Surface.tsx),
@@ -153,7 +171,8 @@ export const WIDGET_META: Record<
   selector: { name: "Selector", w: 140, h: 130, minW: 90, minH: 60, bindings: ["param", "none"] },
   meter: { name: "Meter", w: 50, h: 180, minW: 30, minH: 80, bindings: ["meter"] },
   label: { name: "Label", w: 200, h: 44, minW: 40, minH: 24, bindings: [] },
-  panel: { name: "Pedal", w: 280, h: 340, minW: 100, minH: 100, bindings: [] },
+  // A pedal's binding only drives its LED (and whether an animated finish runs).
+  panel: { name: "Pedal", w: 280, h: 340, minW: 100, minH: 100, bindings: ["none", "bypass"] },
   tuner: { name: "Tuner", w: 240, h: 110, minW: 160, minH: 80, bindings: [] },
 };
 

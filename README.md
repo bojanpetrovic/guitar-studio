@@ -88,6 +88,12 @@ wire to the rig. Switch views with **⌘1** (Rig) and **⌘2** (Pedalboard).
 - **Build from rig** creates one pedal per plugin in signal order. Each gets an on/off
   footswitch, its two main knobs and an amp/channel selector where the plugin has
   one. The board also gets tap tempo, a tuner and an output meter.
+- **Pedals** are stompbox enclosures (jacks, DC socket, screws, status LED) in a
+  choice of finishes: Classic, Brushed, Hammered, Vintage and Flake, plus animated
+  Neon (a light chasing round the edge), Holo (iridescent foil), Scope (a phosphor
+  screen with moving traces) and Lava (glowing blobs). Wired to a plugin's on/off
+  (Build from rig does this), a pedal's LED follows it and an animated finish runs
+  only while the plugin is on.
 - **Surfaces:** with nothing selected, the inspector picks the board's background
   from live previews. The static ones are Slate, Carbon, Steel, Tolex, Tweed, Velvet,
   Blueprint and a range of woods (Wood, Walnut, Maple, Mahogany, Rosewood, Ebony, Oak

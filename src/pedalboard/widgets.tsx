@@ -4,7 +4,7 @@ import { usePeakLevels } from "../hooks";
 import { useStudio } from "../studio";
 import { clamp01, formatCents, isTyping, tickLit, TUNER_TICKS, tuneState } from "../util";
 import { Resolved, useResolved } from "./runtime";
-import { keyLabel, Widget } from "./types";
+import { keyLabel, PedalFinish, Widget } from "./types";
 
 interface Props {
   w: Widget;
@@ -358,14 +358,58 @@ function Label({ w }: Props) {
   );
 }
 
+/** A pedal enclosure. Wired to a plugin's on/off, its LED follows it, and an animated
+ *  finish runs only while the plugin is on. */
 function Panel({ w }: Props) {
+  const r = useResolved(w);
+  const led = w.binding.kind === "none" ? undefined : r.on;
+  return <Pedal finish={w.options.finish} color={w.color} label={w.label} led={led} />;
+}
+
+/** The scope finish's traces: periodic over the path, so sliding by half loops. */
+const wave = (period: number, amp: number, harmonic: number) => {
+  let d = "";
+  for (let x = 0; x <= 400; x += 4) {
+    const t = (2 * Math.PI * x) / period;
+    d += `${x ? "L" : "M"}${x},${(50 + amp * Math.sin(t) + harmonic * Math.sin(2 * t + 1)).toFixed(1)}`;
+  }
+  return d;
+};
+const TRACE_A = wave(100, 26, 9);
+const TRACE_B = wave(200, 16, 0);
+
+/** A stompbox body: jacks, rim, screws, LED (`undefined`: always lit, it follows
+ *  nothing) and title, in one of the PEDAL_FINISHES. Also the inspector's previews. */
+export function Pedal({ finish = "classic", color, label, led }: { finish?: PedalFinish; color: string; label: string; led?: boolean }) {
+  const off = led === false;
   return (
-    <div className="pb-panel" style={{ "--enclosure": w.color } as React.CSSProperties}>
-      <span className="pb-screw tl" />
-      <span className="pb-screw tr" />
-      <span className="pb-screw bl" />
-      <span className="pb-screw br" />
-      <span className="pb-panel-title">{w.label}</span>
+    <div className={`pb-panel finish-${finish} ${off ? "off" : ""}`} style={{ "--enclosure": color } as React.CSSProperties}>
+      {finish === "neon" && <span className="pb-pedal-glow" />}
+      <span className="pb-pedal-jack in" />
+      <span className="pb-pedal-jack out" />
+      <span className="pb-pedal-dc" />
+      <div className="pb-pedal-body">
+        <span className="pb-pedal-art">
+          {finish === "scope" && (
+            <>
+              <svg className="pb-trace b" viewBox="0 0 400 100" preserveAspectRatio="none">
+                <path d={TRACE_B} />
+              </svg>
+              <svg className="pb-trace a" viewBox="0 0 400 100" preserveAspectRatio="none">
+                <path className="halo" d={TRACE_A} />
+                <path d={TRACE_A} />
+              </svg>
+            </>
+          )}
+          {finish === "lava" && [0, 1, 2, 3].map((i) => <span key={i} className={`pb-blob b${i}`} />)}
+        </span>
+        <span className="pb-screw tl" />
+        <span className="pb-screw tr" />
+        <span className="pb-screw bl" />
+        <span className="pb-screw br" />
+        <span className={`pb-pedal-led ${off ? "" : "on"}`} />
+        <span className="pb-panel-title">{label}</span>
+      </div>
     </div>
   );
 }

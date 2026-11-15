@@ -4,6 +4,7 @@ import { useStudio } from "../studio";
 import { nodeName, NodeView } from "../api";
 import { useResolved, useRuntime } from "./runtime";
 import Surface from "./Surface";
+import { Pedal } from "./widgets";
 import {
   ACCENTS,
   Binding,
@@ -15,6 +16,7 @@ import {
   ENCLOSURES,
   KEYABLE,
   keyLabel,
+  PEDAL_FINISHES,
   reservedKey,
   SURFACES,
   Widget,
@@ -190,7 +192,12 @@ function NumberField({ label, value, onChange, step = 1 }: { label: string; valu
 
 function BindingStatus({ w }: { w: Widget }) {
   const r = useResolved(w);
-  if (w.binding.kind === "none") return <p className="insp-status warn">Not connected to anything yet.</p>;
+  if (w.binding.kind === "none")
+    return w.type === "panel" ? (
+      <p className="muted small">Pick a plugin to light the LED while it's on (animated finishes then run only while it's on).</p>
+    ) : (
+      <p className="insp-status warn">Not connected to anything yet.</p>
+    );
   return <p className={`insp-status ${r.ok ? "ok" : "warn"}`}>{r.ok ? `→ ${r.target}` : `Missing: ${r.target}`}</p>;
 }
 
@@ -314,6 +321,32 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
         </div>
       </div>
 
+      {w.type === "panel" && (
+        <div className="insp-field">
+          <span>Finish</span>
+          <div className="surface-picker">
+            {PEDAL_FINISHES.map((f) => (
+              <button
+                key={f.id}
+                className={`surface-swatch ${(w.options.finish ?? "classic") === f.id ? "on" : ""}`}
+                onClick={() => setOpt({ finish: f.id })}
+                title={"animated" in f ? `${f.label} (animated)` : f.label}
+              >
+                <span className="finish-art">
+                  <span className="finish-pedal">
+                    <Pedal finish={f.id} color={w.color} label="" />
+                  </span>
+                </span>
+                <span className="swatch-label">
+                  {f.label}
+                  {"animated" in f && <Sparkles size={10} />}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {KEYABLE.includes(w.type) && <KeyField w={w} board={board} onKey={(key) => setOpt({ key })} />}
 
       {w.type === "label" && (
@@ -322,7 +355,7 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
 
       {meta.bindings.length > 0 && (
         <div className="insp-section">
-          <h4>Controls</h4>
+          <h4>{w.type === "panel" ? "LED" : "Controls"}</h4>
           <label className="insp-field">
             <span>Target</span>
             <select
