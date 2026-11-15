@@ -5,7 +5,8 @@
 | **macOS** 13 Ventura or newer, Apple silicon or Intel | `Guitar-Studio-…-macOS.pkg` |
 | **Windows** 10 or 11, 64-bit | `Guitar-Studio-…-Windows-setup.exe` |
 
-Each installer has the desktop app and the VST3 and CLAP plugins.
+Each installer has the desktop app and the VST3 and CLAP plugins. New to it? See the
+[user manual](https://github.com/bojanpetrovic/guitar-studio/blob/master/docs/manual/README.md).
 
 ### macOS
 

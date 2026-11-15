@@ -3,6 +3,10 @@
 A desktop guitar studio: host VST3 / AU / CLAP plugins, patch them together freely,
 with a built-in tuner and metronome. Rust audio engine, Tauri v2 + React UI.
 
+![A pedalboard in Guitar Studio](docs/manual/images/board.png)
+
+**[User manual](docs/manual/README.md)**: every feature, with screenshots.
+
 ## Install
 
 Download the installer for your computer from the
@@ -252,6 +256,7 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
 | `src-tauri` | Tauri shell: the `call` / `call_async` commands, phone-remote server (`remote.rs`) |
 | `scripts/bundle-plugin.sh` | Packages the plugin bundles (`make plugin`) |
 | `src` | React UI: React Flow patch canvas, plugin browser, tuner, metronome, settings |
+| `docs/manual` | The user manual; `make docs-screenshots` retakes its screenshots (`scripts/docs`, `src-tauri/examples/docs_server.rs`) |
 | `docs/RESEARCH.md` | Tech research and roadmap |
 | `vendor/truce-rack-vst3` | Patched copy of the VST3 host crate (see `vendor/README.md`) |
 
@@ -311,6 +316,7 @@ cargo run --release -p gs-engine --example background_load -- au "Cory Wong"  # 
 make params FORMAT=au PLUGIN=nolly      # list a plugin's parameters (ids for pedalboard bindings)
 make scan                               # rescan plugins into the app's cache
 make reset-settings                     # forget the saved audio device and plugin cache
+make docs-screenshots                   # retake the manual's screenshots (real UI, free plugins only)
 ```
 
 ## Not done yet

@@ -24,5 +24,8 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 axum = { version = "0.8", default-features = false, features = ["ws", "http1", "tokio", "query"] }
 
+[dev-dependencies]
+anyhow = "1"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }

@@ -11,7 +11,7 @@ FORMAT       ?= au
 PLUGIN       ?= nolly
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev build bundle package run test test-engine lint fmt fmt-check check \
+.PHONY: help install dev build bundle package docs-screenshots run test test-engine lint fmt fmt-check check \
         plugin plugin-install plugin-uninstall plugin-test smoke preset-test param-test scene-test preset-timing params scan icons clean clean-all reset-settings
 
 help: ## Show this help
@@ -53,6 +53,13 @@ bundle: node_modules ## Build the macOS .app and .dmg
 package: node_modules plugin ## Build the macOS installer (.pkg: app + VST3 + CLAP) into target/out
 	$(SYS_XATTR) npm run tauri build -- --bundles app
 	scripts/package-mac.sh "target/release/bundle/macos/Guitar Studio.app" target/plugin target/out
+
+DOCS_DATA    := target/docs-data
+docs-screenshots: node_modules ## Retake the user manual's screenshots (docs/manual/images; macOS + Chrome)
+	npm run build
+	$(CXX_FIX) cargo build --release -p guitar-studio --example docs_server
+	node scripts/docs/prepare-data.mjs "$(APP_DATA)/plugins.json" $(DOCS_DATA)
+	node scripts/docs/screenshots.mjs --data $(DOCS_DATA)
 
 icons: node_modules ## Regenerate app icons from assets/app-icon.svg
 	npx tauri icon assets/app-icon.svg -o src-tauri/icons
