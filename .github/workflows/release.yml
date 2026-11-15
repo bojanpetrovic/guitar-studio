@@ -1,7 +1,7 @@
 # Builds the installers: a macOS .pkg (universal: Apple silicon + Intel) and a Windows
 # setup .exe, each with the desktop app and the VST3 / CLAP plugins.
 #
-# Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) to build them and put
+# Push a version tag (`git tag v0.1.1 && git push origin v0.1.1`) to build them and put
 # them on a draft GitHub release; publish the draft when it looks right. "Run workflow"
 # on the Actions tab builds them without a release (download them from the run).
 name: Release

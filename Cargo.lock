@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "gs-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "gs-engine",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "gs-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "gs-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap-sys",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "guitar-studio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "futures-util",

@@ -276,7 +276,7 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
 tag to get them on a draft release:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 - **macOS:** a universal app (Tauri) and plugin (`lipo`), packed by
