@@ -1897,6 +1897,10 @@ select {
   border-radius: 10px;
   z-index: 5;
 }
+/* A pedal stays under the controls on it, selected or not. */
+.editing .pb-widget.type-panel.selected {
+  z-index: auto;
+}
 /* Selection box, drawn over the board (screen units). */
 .pb-marquee {
   position: absolute;

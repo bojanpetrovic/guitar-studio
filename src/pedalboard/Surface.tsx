@@ -49,7 +49,9 @@ function ParticleField({ kind }: { kind: ParticleKind }) {
     let frame = 0;
     let last = performance.now();
     const render = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      // A frame's timestamp can be a little before the \`performance.now()\` we started
+      // from: never step backwards.
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
       last = now;
       if (frame++ % 60 === 0) fit();
       const t = now / 1000;
@@ -151,7 +153,7 @@ function plexus(): Sim {
  *  they fade. */
 function sparks(STOPS: number[][]): Sim {
   const color = (p: number) => {
-    const x = Math.min(0.999, p) * (STOPS.length - 1);
+    const x = Math.min(0.999, Math.max(0, p || 0)) * (STOPS.length - 1);
     const i = Math.floor(x);
     const f = x - i;
     return STOPS[i].map((v, k) => Math.round(v + (STOPS[i + 1][k] - v) * f)).join(", ");

@@ -481,7 +481,8 @@ export default function PedalboardView() {
       const panel = makeWidget("panel", x, 30);
       Object.assign(panel, {
         w: width,
-        h: 350,
+        // Tall enough that the name (along the bottom edge) clears the footswitch.
+        h: 390,
         color: ENCLOSURES[i % ENCLOSURES.length],
         label: (p.plugin?.name ?? "Pedal").toUpperCase().slice(0, 22),
         binding: { kind: "bypass", node: p.id },
@@ -503,7 +504,7 @@ export default function PedalboardView() {
         });
         widgets.push(sel);
       }
-      const sw = makeWidget("footswitch", x + (modeParam ? 150 : 80), 210);
+      const sw = makeWidget("footswitch", x + (modeParam ? 150 : 80), 190);
       Object.assign(sw, { label: "ON / OFF", color: "#ff5d5d", binding: { kind: "bypass", node: p.id } });
       widgets.push(sw);
       x += width + 30;
@@ -513,7 +514,7 @@ export default function PedalboardView() {
       const strips = m.strips.slice(0, 6);
       const width = Math.max(160, 30 + strips.length * 80);
       const panel = makeWidget("panel", x, 30);
-      Object.assign(panel, { w: width, h: 350, color: ENCLOSURES[6], label: "MIXER" });
+      Object.assign(panel, { w: width, h: 390, color: ENCLOSURES[6], label: "MIXER" });
       widgets.push(panel);
       strips.forEach((st, k) => {
         const f = makeWidget("fader", x + 20 + k * 80, 50);
