@@ -81,6 +81,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
 
+      # ASIO: cpal builds Steinberg's ASIO SDK (dual-licensed; used under the GPLv3, see
+      # licenses/THIRD-PARTY-NOTICES.md). A fixed version, not whatever is newest.
+      - name: ASIO SDK
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/asiosdk.zip" \
+            https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip
+          unzip -q "$RUNNER_TEMP/asiosdk.zip" -d "$RUNNER_TEMP/asiosdk"
+          sdk="$(dirname "$(dirname "$(find "$RUNNER_TEMP/asiosdk" -path '*/common/asio.h' | head -1)")")"
+          echo "CPAL_ASIO_DIR=$(cygpath -w "$sdk")" >> "$GITHUB_ENV"
+
       # First: the installer takes the plugins from target/plugin (tauri.windows.conf.json).
       - name: Plugin
         run: |
@@ -115,10 +125,16 @@ jobs:
         with:
           path: out
           merge-multiple: true
-      - name: Create the draft
+      # A rebuilt tag refreshes its release (still a draft, or already published).
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" out/* --draft \
-            --title "Guitar Studio ${GITHUB_REF_NAME#v}" \
-            --notes-file .github/release-notes.md
+          title="Guitar Studio ${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "$title" --notes-file .github/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --draft --title "$title" \
+              --notes-file .github/release-notes.md
+          fi

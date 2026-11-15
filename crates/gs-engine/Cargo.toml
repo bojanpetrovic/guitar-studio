@@ -15,6 +15,11 @@ serde_json = "1"
 log = "0.4"
 base64 = "0.23"
 
+# ASIO drivers on Windows (cpal builds Steinberg's ASIO SDK, used under GPLv3; see
+# README "Releases"). Needs CPAL_ASIO_DIR (or downloads the SDK) and LLVM for bindgen.
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "0.18.2", features = ["asio"] }
+
 [dev-dependencies]
 tempfile = "3"
 

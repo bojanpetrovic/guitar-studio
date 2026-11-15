@@ -17,7 +17,9 @@
   "bundle": {
     "targets": ["nsis"],
     "resources": {
-      "../target/plugin/": "plugins/"
+      "../target/plugin/": "plugins/",
+      "../licenses/": "licenses/",
+      "../LICENSE": "licenses/LICENSE"
     },
     "windows": {
       "nsis": {

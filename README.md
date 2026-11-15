@@ -12,6 +12,11 @@ installs the desktop app and the VST3 and CLAP plugins. The builds aren't code-s
 so macOS and Windows ask once before running them. The release notes say how to get past
 that.
 
+On Windows, pick your interface's ASIO driver (listed as "ASIO: …") in Audio settings for
+the lowest latency. ASIO is a trademark and software of Steinberg Media Technologies GmbH.
+The Windows build includes Steinberg's ASIO SDK under the GPLv3; see
+`licenses/THIRD-PARTY-NOTICES.md`.
+
 ## Run from source
 
 ```sh
@@ -282,6 +287,13 @@ git tag v0.1.0 && git push origin v0.1.0
   CLAP in a folder of its own beside its scanner and UI). Tauri's NSIS installer carries
   them (`src-tauri/tauri.windows.conf.json`) and copies them to `Common Files\VST3` and
   `Common Files\CLAP` (`src-tauri/windows/installer-hooks.nsh`).
+- **ASIO (Windows):** cpal's ASIO host is built from Steinberg's ASIO SDK, which the
+  workflow downloads (a fixed version) and points `CPAL_ASIO_DIR` at. The SDK is
+  dual-licensed, and we use it under the **GPLv3**. So the Windows installer as a whole
+  is GPLv3: it must come with the source (this repo, public) and ships the licence
+  texts from `licenses/`. Our own code stays MIT. A local Windows build needs Visual
+  Studio, LLVM (for bindgen) and either `CPAL_ASIO_DIR` or a network connection (asio-sys
+  then downloads the SDK itself).
 
 The version comes from `Cargo.toml`, `package.json` and `src-tauri/tauri.conf.json`;
 bump all three together.
@@ -310,4 +322,3 @@ make reset-settings                     # forget the saved audio device and plug
 - Out-of-process plugin sandboxing (scanning is already isolated)
 - Code signing and notarization (needs an Apple Developer ID; `Entitlements.plist`
   already has the required keys) and Windows code signing
-- ASIO on Windows (audio goes through WASAPI for now)

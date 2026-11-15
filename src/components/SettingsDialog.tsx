@@ -5,6 +5,21 @@ import { api, AudioConfig, DeviceList } from "../api";
 
 const BUFFER_SIZES = [32, 64, 128, 256, 512, 1024];
 
+/** ASIO drivers (Windows) are listed with this prefix (see `gs_engine::audio::ASIO_PREFIX`). */
+const ASIO = "ASIO: ";
+const isAsio = (name: string | null | undefined) => !!name?.startsWith(ASIO);
+
+/**
+ * An ASIO driver does input and output together, and only one can be open: picking one
+ * on either side picks it on the other too (and leaving it on one side leaves both).
+ */
+function pickDevice(cfg: AudioConfig, side: "inputDevice" | "outputDevice", name: string | null): AudioConfig {
+  const other = side === "inputDevice" ? "outputDevice" : "inputDevice";
+  if (isAsio(name)) return { ...cfg, [side]: name, [other]: name };
+  if (isAsio(cfg[other])) return { ...cfg, [side]: name, [other]: null };
+  return { ...cfg, [side]: name };
+}
+
 export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { studio, actions } = useStudio();
   const [devices, setDevices] = useState<DeviceList | null>(null);
@@ -49,7 +64,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
         <label className="field">
           <span>Input device</span>
-          <select value={cfg.inputDevice ?? ""} onChange={(e) => setCfg({ ...cfg, inputDevice: e.target.value || null })}>
+          <select value={cfg.inputDevice ?? ""} onChange={(e) => setCfg(pickDevice(cfg, "inputDevice", e.target.value || null))}>
             <option value="">System default</option>
             {devices?.inputs.map((d) => (
               <option key={d.name} value={d.name}>
@@ -61,7 +76,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
 
         <label className="field">
           <span>Output device</span>
-          <select value={cfg.outputDevice ?? ""} onChange={(e) => setCfg({ ...cfg, outputDevice: e.target.value || null })}>
+          <select value={cfg.outputDevice ?? ""} onChange={(e) => setCfg(pickDevice(cfg, "outputDevice", e.target.value || null))}>
             <option value="">System default</option>
             {devices?.outputs.map((d) => (
               <option key={d.name} value={d.name}>
@@ -86,10 +101,19 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </small>
         </div>
 
-        <p className="hint">
-          Tip: use the same audio interface for input and output so both run on one clock. Mixing devices (e.g. interface in,
-          MacBook speakers out) works, but adds jitter.
-        </p>
+        {isAsio(cfg.inputDevice) ? (
+          <p className="hint">
+            An ASIO driver runs input and output together. If the buffer size or sample rate doesn't follow these
+            settings, change them in the driver's own control panel. ASIO is a trademark and software of Steinberg
+            Media Technologies GmbH.
+          </p>
+        ) : (
+          <p className="hint">
+            Tip: use the same audio interface for input and output so both run on one clock. Mixing devices (e.g. interface
+            in, laptop speakers out) works, but adds jitter.
+            {devices?.inputs.some((d) => isAsio(d.name)) && " On Windows, an ASIO driver gives the lowest latency."}
+          </p>
+        )}
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>

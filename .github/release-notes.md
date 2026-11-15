@@ -23,8 +23,20 @@ The installer isn't signed either, so SmartScreen may say *Windows protected you
 Click **More info → Run anyway**. It installs the app, the VST3 plugin in
 `C:\Program Files\Common Files\VST3` and the CLAP plugin in `…\Common Files\CLAP\Guitar Studio`.
 
-Audio on Windows goes through the system's own audio (WASAPI) for now. ASIO isn't
-supported yet. This is the first Windows build, so please report anything that doesn't work.
+**ASIO:** for the lowest latency, pick your interface's ASIO driver in Audio settings.
+ASIO drivers are listed as "ASIO: …", next to the normal Windows devices. An ASIO driver
+handles input and output together, and its buffer size and sample rate may only change in
+the driver's own control panel. Computers without an interface's ASIO driver can use
+FlexASIO or ASIO4ALL.
+
+This is the first Windows build, so please report anything that doesn't work.
+
+### License
+
+Guitar Studio is MIT-licensed. The Windows installer also contains Steinberg's ASIO SDK,
+used under the GNU GPL v3, so the Windows build as a whole is distributed under the
+GPLv3. The licence texts are installed with it (`licenses\`). ASIO is a trademark and
+software of Steinberg Media Technologies GmbH.
 
 ### In a DAW
 

@@ -1,4 +1,5 @@
-//! Device I/O (cpal / CoreAudio) and the real-time callback.
+//! Device I/O (cpal: CoreAudio on macOS; WASAPI and ASIO on Windows) and the real-time
+//! callback.
 //!
 //! cpal opens input and output as separate streams, so the input callback pushes
 //! samples into a lock-free ring that the output callback drains. The output side
@@ -8,7 +9,7 @@ use crate::graph::Schedule;
 use crate::metronome::{Metronome, MetronomeShared};
 use crate::nodes::{self, MAX_BLOCK, ProcessCtx};
 use crate::util::{AtomicF32, peak};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -55,59 +56,101 @@ pub struct AudioStatus {
     pub latency_ms: f32,
 }
 
+/// How ASIO drivers are named in device lists and saved settings ("ASIO: Fireface USB"),
+/// next to the system's own (WASAPI) devices. Windows only.
+pub const ASIO_PREFIX: &str = "ASIO: ";
+
+/// Whether a saved device name is an ASIO driver.
+pub fn is_asio(name: &Option<String>) -> bool {
+    name.as_deref().is_some_and(|n| n.starts_with(ASIO_PREFIX))
+}
+
+/// The audio systems devices come from, with the prefix their device names get: the
+/// system's default one, plus ASIO on Windows.
+fn hosts() -> Vec<(cpal::Host, &'static str)> {
+    #[allow(unused_mut)]
+    let mut hosts = vec![(cpal::default_host(), "")];
+    #[cfg(windows)]
+    match cpal::host_from_id(cpal::HostId::Asio) {
+        Ok(asio) => hosts.push((asio, ASIO_PREFIX)),
+        Err(e) => log::warn!("ASIO isn't available: {e}"),
+    }
+    hosts
+}
+
 pub fn list_devices() -> DeviceList {
-    let host = cpal::default_host();
-    let default_in = host.default_input_device().map(|d| d.to_string());
-    let default_out = host.default_output_device().map(|d| d.to_string());
-    let collect = |devices: Vec<cpal::Device>, input: bool, default: &Option<String>| {
-        devices
-            .into_iter()
-            .filter_map(|d| {
-                let cfg = if input {
-                    d.default_input_config()
-                } else {
-                    d.default_output_config()
-                }
-                .ok()?;
-                let name = d.to_string();
-                Some(DeviceInfo {
-                    is_default: Some(&name) == default.as_ref(),
-                    name,
-                    channels: cfg.channels(),
-                })
-            })
-            .collect::<Vec<_>>()
+    let mut list = DeviceList {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
     };
-    DeviceList {
-        inputs: collect(
+    for (host, prefix) in hosts() {
+        // Only the system's own audio has a default device.
+        let default_in = host.default_input_device().map(|d| d.to_string());
+        let default_out = host.default_output_device().map(|d| d.to_string());
+        let collect = |devices: Vec<cpal::Device>, input: bool, default: &Option<String>| {
+            devices
+                .into_iter()
+                .filter_map(|d| {
+                    let cfg = if input {
+                        d.default_input_config()
+                    } else {
+                        d.default_output_config()
+                    }
+                    .ok()?;
+                    let name = d.to_string();
+                    Some(DeviceInfo {
+                        is_default: prefix.is_empty() && Some(&name) == default.as_ref(),
+                        name: format!("{prefix}{name}"),
+                        channels: cfg.channels(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        list.inputs.extend(collect(
             host.input_devices()
                 .map(|i| i.collect())
                 .unwrap_or_default(),
             true,
             &default_in,
-        ),
-        outputs: collect(
+        ));
+        list.outputs.extend(collect(
             host.output_devices()
                 .map(|i| i.collect())
                 .unwrap_or_default(),
             false,
             &default_out,
-        ),
+        ));
     }
+    list
 }
 
 fn find_device(input: bool, name: &Option<String>) -> Result<cpal::Device> {
-    let host = cpal::default_host();
     if let Some(name) = name {
-        let mut devices: Vec<cpal::Device> = if input {
-            host.input_devices()?.collect()
-        } else {
-            host.output_devices()?.collect()
-        };
-        if let Some(pos) = devices.iter().position(|d| &d.to_string() == name) {
-            return Ok(devices.swap_remove(pos));
+        for (host, prefix) in hosts() {
+            let Some(name) = name.strip_prefix(prefix) else {
+                continue;
+            };
+            if prefix.is_empty() && name.starts_with(ASIO_PREFIX) {
+                continue;
+            }
+            let mut devices: Vec<cpal::Device> = if input {
+                host.input_devices()?.collect()
+            } else {
+                host.output_devices()?.collect()
+            };
+            if let Some(pos) = devices.iter().position(|d| d.to_string() == name) {
+                return Ok(devices.swap_remove(pos));
+            }
+            if !prefix.is_empty() {
+                // An ASIO driver that's gone (or busy in another app): say so rather
+                // than quietly switching to some other device.
+                bail!(
+                    "the ASIO driver '{name}' isn't available (is the interface connected, or is another app using it?)"
+                );
+            }
         }
     }
+    let host = cpal::default_host();
     let dev = if input {
         host.default_input_device()
     } else {
@@ -255,8 +298,17 @@ pub fn start(
     initial: Schedule,
     tuner_tx: rtrb::Producer<f32>,
 ) -> Result<RunningAudio> {
-    let in_dev = find_device(true, &config.input_device)?;
-    let out_dev = find_device(false, &config.output_device)?;
+    // An ASIO driver does input and output together, and only one can be open: use the
+    // same driver both ways.
+    let (input_device, output_device) = if is_asio(&config.input_device) {
+        (&config.input_device, &config.input_device)
+    } else if is_asio(&config.output_device) {
+        (&config.output_device, &config.output_device)
+    } else {
+        (&config.input_device, &config.output_device)
+    };
+    let in_dev = find_device(true, input_device)?;
+    let out_dev = find_device(false, output_device)?;
     let out_default = out_dev
         .default_output_config()
         .context("output device config")?;
@@ -292,7 +344,7 @@ pub fn start(
     };
 
     let ring_len = in_channels as usize * MAX_BLOCK * 8;
-    let (mut in_tx, in_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
+    let (in_tx, in_rx) = rtrb::RingBuffer::<f32>::new(ring_len);
     let (core, commands, garbage) = Core::new(
         initial,
         shared,
@@ -302,19 +354,16 @@ pub fn start(
         false,
     );
 
-    let input = in_dev
-        .build_input_stream::<f32, _, _>(
-            in_cfg,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let n = data.len().min(in_tx.slots());
-                if let Ok(chunk) = in_tx.write_chunk_uninit(n) {
-                    chunk.fill_from_iter(data.iter().copied());
-                }
-            },
-            |e| log::error!("input stream error: {e}"),
-            None,
-        )
-        .context("opening input stream (is microphone access allowed?)")?;
+    // Most devices hand over floats; many ASIO drivers want their own integer format.
+    let input = match in_default.sample_format() {
+        cpal::SampleFormat::F32 => input_stream::<f32>(&in_dev, in_cfg, in_tx),
+        cpal::SampleFormat::I32 => input_stream::<i32>(&in_dev, in_cfg, in_tx),
+        cpal::SampleFormat::I24 => input_stream::<cpal::I24>(&in_dev, in_cfg, in_tx),
+        cpal::SampleFormat::I16 => input_stream::<i16>(&in_dev, in_cfg, in_tx),
+        cpal::SampleFormat::F64 => input_stream::<f64>(&in_dev, in_cfg, in_tx),
+        other => bail!("'{in_dev}' delivers {other} samples, which aren't supported"),
+    }
+    .context("opening input stream (is microphone access allowed?)")?;
 
     let mut rt = DeviceRt {
         core,
@@ -324,14 +373,20 @@ pub fn start(
         interleaved: vec![0.0; MAX_BLOCK * in_channels as usize],
         max_queue_frames: effective_buffer as usize * 2,
     };
-    let output = out_dev
-        .build_output_stream::<f32, _, _>(
+    let output = match out_default.sample_format() {
+        cpal::SampleFormat::F32 => out_dev.build_output_stream::<f32, _, _>(
             out_cfg,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| rt.process(data),
             |e| log::error!("output stream error: {e}"),
             None,
-        )
-        .context("opening output stream")?;
+        ),
+        cpal::SampleFormat::I32 => output_stream::<i32>(&out_dev, out_cfg, rt),
+        cpal::SampleFormat::I24 => output_stream::<cpal::I24>(&out_dev, out_cfg, rt),
+        cpal::SampleFormat::I16 => output_stream::<i16>(&out_dev, out_cfg, rt),
+        cpal::SampleFormat::F64 => output_stream::<f64>(&out_dev, out_cfg, rt),
+        other => bail!("'{out_dev}' wants {other} samples, which aren't supported"),
+    }
+    .context("opening output stream")?;
 
     input.play().context("starting input")?;
     output.play().context("starting output")?;
@@ -343,8 +398,8 @@ pub fn start(
         garbage,
         AudioStatus {
             running: true,
-            input_device: in_dev.to_string(),
-            output_device: out_dev.to_string(),
+            input_device: shown_name(input_device, &in_dev),
+            output_device: shown_name(output_device, &out_dev),
             input_channels: in_channels,
             output_channels: out_channels,
             sample_rate,
@@ -352,6 +407,66 @@ pub fn start(
             latency_ms,
         },
     ))
+}
+
+/// A device's name as the device list shows it (ASIO drivers carry their prefix).
+fn shown_name(chosen: &Option<String>, dev: &cpal::Device) -> String {
+    if is_asio(chosen) {
+        format!("{ASIO_PREFIX}{dev}")
+    } else {
+        dev.to_string()
+    }
+}
+
+/// An input stream of the device's own sample type, pushed into `ring` as floats.
+fn input_stream<T>(
+    dev: &cpal::Device,
+    cfg: cpal::StreamConfig,
+    mut ring: rtrb::Producer<f32>,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    dev.build_input_stream::<T, _, _>(
+        cfg,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            let n = data.len().min(ring.slots());
+            if let Ok(chunk) = ring.write_chunk_uninit(n) {
+                chunk.fill_from_iter(data.iter().map(|s| s.to_sample::<f32>()));
+            }
+        },
+        |e| log::error!("input stream error: {e}"),
+        None,
+    )
+}
+
+/// An output stream of the device's own sample type: the engine renders floats into a
+/// buffer made up front (nothing is allocated while playing), converted as they go out.
+fn output_stream<T>(
+    dev: &cpal::Device,
+    cfg: cpal::StreamConfig,
+    mut rt: DeviceRt,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    let channels = rt.out_channels.max(1);
+    let mut floats = vec![0.0f32; MAX_BLOCK * 4 * channels];
+    dev.build_output_stream::<T, _, _>(
+        cfg,
+        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            for chunk in data.chunks_mut(floats.len()) {
+                let rendered = &mut floats[..chunk.len()];
+                rt.process(rendered);
+                for (out, v) in chunk.iter_mut().zip(rendered.iter()) {
+                    *out = T::from_sample(*v);
+                }
+            }
+        },
+        |e| log::error!("output stream error: {e}"),
+        None,
+    )
 }
 
 /// Audio driven by a plugin host (Guitar Studio running as a plugin): the host calls
