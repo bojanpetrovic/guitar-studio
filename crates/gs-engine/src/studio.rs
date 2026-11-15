@@ -717,7 +717,9 @@ impl Studio {
             }
         }
         if !have_input {
+            // A fresh Input listens to the first channel; so does the tuner.
             self.insert_node(NodeType::Input, 0.0, 0.0, 0.0, None);
+            self.tuner_channel.store(0, Ordering::Relaxed);
         }
         if !have_output {
             let id = self.insert_node(NodeType::Output, 600.0, 0.0, 0.0, None);
@@ -1403,5 +1405,47 @@ mod tests {
         s.connect(a, b).unwrap();
         assert!(s.connect(b, a).is_err());
         assert!(s.connect(a, a).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tuner_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Plays an A2 into input `guitar_on` of a hosted engine (2 channels) whose Input
+    /// node is set to `input_channel`, then returns the note the tuner shows.
+    fn tuned(input_channel: u32, guitar_on: usize) -> Option<String> {
+        let mut s = Studio::new();
+        let mut audio = s.start_hosted(48_000, 2, 512).unwrap();
+        s.set_param(1, "channel", input_channel as f32).unwrap();
+        let silence = vec![0.0f32; 512];
+        let (mut l, mut r) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+        for block in 0..120 {
+            let tone: Vec<f32> = (0..512)
+                .map(|i| {
+                    0.3 * (std::f32::consts::TAU * 110.0 * (block * 512 + i) as f32 / 48_000.0)
+                        .sin()
+                })
+                .collect();
+            let mut ins: [&[f32]; 2] = [&silence, &silence];
+            ins[guitar_on] = &tone;
+            audio.process(&ins, &mut [&mut l, &mut r], 512, None);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        s.telemetry()
+            .tuner
+            .map(|r| format!("{}{}", r.note, r.octave))
+    }
+
+    #[test]
+    fn tuner_hears_what_the_input_node_plays() {
+        assert_eq!(tuned(1, 1).as_deref(), Some("A2"));
+        // Not another channel.
+        assert_eq!(tuned(0, 1), None);
+        // A rig made on an interface's 4th input, in a DAW with 2 channels: the Input
+        // node falls back to the first channel, and the tuner with it.
+        assert_eq!(tuned(3, 0).as_deref(), Some("A2"));
     }
 }

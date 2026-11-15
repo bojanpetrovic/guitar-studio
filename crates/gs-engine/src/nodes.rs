@@ -83,6 +83,16 @@ pub struct InputNode {
     gain: f32,
 }
 
+/// The audio the Input node plays: the device channel it's set to or, in a DAW (which
+/// may hand us fewer channels than the rig was made with), the first one. The tuner
+/// listens to the same, so it always hears what the rig hears.
+pub fn input_source(hw_input: &[Vec<f32>], channel: usize, hosted: bool) -> Option<&[f32]> {
+    hw_input
+        .get(channel)
+        .or(hw_input.first().filter(|_| hosted))
+        .map(Vec::as_slice)
+}
+
 impl InputNode {
     pub fn new(shared: Arc<NodeShared>) -> Self {
         let gain = shared.gain.load();
@@ -94,8 +104,7 @@ impl Processor for InputNode {
     fn process(&mut self, ctx: &ProcessCtx, _input: [&[f32]; 2], output: [&mut [f32]; 2]) {
         let n = ctx.frames;
         let ch = self.shared.channel.load(Ordering::Relaxed) as usize;
-        let src = ctx.hw_input.get(ch);
-        match src.or(ctx.hw_input.first().filter(|_| ctx.hosted)) {
+        match input_source(ctx.hw_input, ch, ctx.hosted) {
             Some(src) => {
                 let src = &src[..n];
                 apply_gain(&mut self.gain, self.shared.gain.load(), [src, src], output);

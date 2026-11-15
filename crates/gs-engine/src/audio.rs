@@ -6,7 +6,7 @@
 
 use crate::graph::Schedule;
 use crate::metronome::{Metronome, MetronomeShared};
-use crate::nodes::{MAX_BLOCK, ProcessCtx};
+use crate::nodes::{self, MAX_BLOCK, ProcessCtx};
 use crate::util::{AtomicF32, peak};
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -525,9 +525,11 @@ impl Core {
         if !self.shared.tuner_enabled.load(Ordering::Relaxed) {
             return;
         }
-        let c = (self.shared.tuner_channel.load(Ordering::Relaxed) as usize)
-            .min(self.hw_in.len().saturating_sub(1));
-        let Some(src) = self.hw_in.get(c) else { return };
+        // The Input node's channel (mirrored into `tuner_channel`), picked the same way.
+        let channel = self.shared.tuner_channel.load(Ordering::Relaxed) as usize;
+        let Some(src) = nodes::input_source(&self.hw_in, channel, self.hosted) else {
+            return;
+        };
         let k = n.min(self.tuner_tx.slots());
         if let Ok(chunk) = self.tuner_tx.write_chunk_uninit(k) {
             chunk.fill_from_iter(src[..k].iter().copied());
