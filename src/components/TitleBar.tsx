@@ -10,6 +10,7 @@ import ThemeMenu from "./ThemeMenu";
 import PhoneMenu from "./PhoneMenu";
 import MuteButton from "./MuteButton";
 import { Side, toggleSidebar, useSidebarOpen } from "../sidebar";
+import { keys } from "../platform";
 
 function CpuReadout() {
   const cpu = useTelemetry((t) => t?.cpuLoad ?? 0);
@@ -37,8 +38,8 @@ function Warming() {
 }
 
 const PANELS = {
-  left: { name: "presets", key: "⌘P", Close: PanelLeftClose, Open: PanelLeftOpen },
-  right: { name: "plugins", key: "⌘B", Close: PanelRightClose, Open: PanelRightOpen },
+  left: { name: "presets", key: keys("⌘P"), Close: PanelLeftClose, Open: PanelLeftOpen },
+  right: { name: "plugins", key: keys("⌘B"), Close: PanelRightClose, Open: PanelRightOpen },
 };
 
 /** Shows / hides a side panel: presets (left) or plugins (right; rig view only, the
@@ -72,10 +73,10 @@ function ViewSwitch() {
   }, [actions, view]);
   return (
     <div className="segmented small view-switch">
-      <button className={view === "rig" ? "on" : ""} onClick={() => actions.setView("rig")} title="Rig (⌘1)">
+      <button className={view === "rig" ? "on" : ""} onClick={() => actions.setView("rig")} title={keys("Rig (⌘1)")}>
         <Workflow size={13} /> Rig
       </button>
-      <button className={view === "board" ? "on" : ""} onClick={() => actions.setView("board")} title="Pedalboard (⌘2)">
+      <button className={view === "board" ? "on" : ""} onClick={() => actions.setView("board")} title={keys("Pedalboard (⌘2)")}>
         <LayoutDashboard size={13} /> Pedalboard
       </button>
     </div>

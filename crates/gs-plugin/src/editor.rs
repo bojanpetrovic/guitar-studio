@@ -5,6 +5,7 @@
 //! events come back by calling `window.__gs` (see `src/transport.ts`). The page is
 //! served from the bundle's `Contents/Resources/ui`, or from Vite when
 //! `GS_PLUGIN_DEV_URL` is set (e.g. `http://localhost:1420` under `npm run dev`).
+//! WKWebView on macOS, WebView2 on Windows.
 
 use crate::host::{Instance, Link, Ui};
 use gs_app::{App, CmdResult, Reply, Request, main_thread};
@@ -46,8 +47,10 @@ impl Editor for WebEditor {
     }
 
     fn open(&mut self, parent: RawWindowHandle, _context: PluginContext) {
-        let RawWindowHandle::AppKit(view) = parent else {
-            return log::error!("the plugin window only works on macOS so far");
+        let view = match parent {
+            RawWindowHandle::AppKit(view) if cfg!(target_os = "macos") => view,
+            RawWindowHandle::Win32(hwnd) if cfg!(windows) => hwnd,
+            _ => return log::error!("the plugin window doesn't work on this platform yet"),
         };
         let handler = Handler {
             id: self.id,
@@ -143,13 +146,11 @@ impl ReplyTo {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod imp {
     use super::Handler;
     use crate::bundle;
-    use raw_window_handle::{
-        AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
-    };
+    use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -175,14 +176,35 @@ window.__GS_PLUGIN__ = true;
     thread_local! {
         /// Open plugin windows by instance.
         static VIEWS: RefCell<HashMap<usize, WebView>> = RefCell::new(HashMap::new());
+        /// WebView2 keeps its files next to the program by default, which for a DAW is
+        /// a folder we can't write to: point it at ours instead (shared by every window
+        /// in this DAW). macOS needs nothing.
+        static CONTEXT: RefCell<Option<wry::WebContext>> = RefCell::new(
+            cfg!(windows).then(|| wry::WebContext::new(Some(gs_app::local_dir().join("plugin-webview"))))
+        );
     }
 
-    /// The DAW's view, as a parent wry understands.
+    /// Where the page is served from: wry maps a custom protocol to `gs://` on macOS and
+    /// to `http://gs.localhost` on Windows.
+    const PAGE: &str = if cfg!(windows) {
+        "http://gs.localhost/"
+    } else {
+        "gs://localhost/"
+    };
+
+    /// The DAW's view (an `NSView` on macOS, an `HWND` on Windows), as a parent wry
+    /// understands.
     struct Parent(NonNull<c_void>);
 
     impl HasWindowHandle for Parent {
         fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-            let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(self.0));
+            #[cfg(target_os = "macos")]
+            let raw = RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(self.0));
+            #[cfg(windows)]
+            let raw = RawWindowHandle::Win32(raw_window_handle::Win32WindowHandle::new(
+                std::num::NonZeroIsize::new(self.0.as_ptr() as isize)
+                    .ok_or(HandleError::Unavailable)?,
+            ));
             // SAFETY: the DAW keeps its view alive while our editor is open.
             Ok(unsafe { WindowHandle::borrow_raw(raw) })
         }
@@ -203,8 +225,12 @@ window.__GS_PLUGIN__ = true;
     ) -> Result<(), String> {
         close(id);
         let parent = Parent(NonNull::new(view).ok_or("the DAW gave no window")?);
-        let url = std::env::var("GS_PLUGIN_DEV_URL").unwrap_or_else(|_| "gs://localhost/".into());
-        let webview = WebViewBuilder::new()
+        let url = std::env::var("GS_PLUGIN_DEV_URL").unwrap_or_else(|_| PAGE.into());
+        let webview = CONTEXT.with_borrow_mut(|context| {
+            match context {
+                Some(context) => WebViewBuilder::new_with_web_context(context),
+                None => WebViewBuilder::new(),
+            }
             .with_url(url)
             // Tells the UI it's in a plugin (see `src/transport.ts`).
             .with_initialization_script(INIT_SCRIPT)
@@ -215,7 +241,8 @@ window.__GS_PLUGIN__ = true;
             .with_accept_first_mouse(true)
             .with_devtools(cfg!(debug_assertions))
             .build_as_child(&parent)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
+        })?;
         log::debug!("plugin window {id} open: {:?}", webview.bounds());
         VIEWS.with_borrow_mut(|views| views.insert(id, webview));
         Ok(())
@@ -299,7 +326,7 @@ window.__GS_PLUGIN__ = true;
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
     use super::Handler;
 
@@ -309,7 +336,7 @@ mod imp {
         _: (u32, u32),
         _: Handler,
     ) -> Result<(), String> {
-        Err("the plugin window only works on macOS so far".into())
+        Err("the plugin window doesn't work on this platform yet".into())
     }
     pub fn close(_: usize) {}
     pub fn resize(_: usize, _: (u32, u32)) {}

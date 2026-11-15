@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { Minus, Pause, Play, Plus, Power, Volume2 } from "lucide-react";
 import { useStudio } from "../studio";
 import { useTelemetry } from "../api";
+import { keys } from "../platform";
 import { BPM_MAX, BPM_MIN, clamp, formatCents, isTyping, tickLit, TUNER_TICKS, tuneState } from "../util";
 
 const SUBDIVISIONS = [
@@ -97,7 +98,7 @@ function DockMetronome() {
         <button className="icon-btn ghost mini" onClick={() => set({ bpm: bpm - 1 })} aria-label="Slower" title="Slower (↓)">
           <Minus size={12} />
         </button>
-        <span className="dock-bpm-value mono" title="Tempo (↑ / ↓, ⇧ for 5)">
+        <span className="dock-bpm-value mono" title={keys("Tempo (↑ / ↓, ⇧ for 5)")}>
           {bpm}
           <small>BPM</small>
         </span>

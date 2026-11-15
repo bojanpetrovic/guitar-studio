@@ -68,7 +68,7 @@ impl Shell for PluginShell {
     fn scanner(&self) -> std::io::Result<PathBuf> {
         let path = bundle::binary_dir()
             .ok_or_else(|| std::io::Error::other("couldn't find the plugin's folder"))?
-            .join("gs-scan");
+            .join(format!("gs-scan{}", std::env::consts::EXE_SUFFIX));
         if path.is_file() {
             Ok(path)
         } else {

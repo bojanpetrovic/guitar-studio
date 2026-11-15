@@ -3243,7 +3243,8 @@ select {
 :root.plugin.stage-mode body {
   background: var(--bg);
 }
-:root.plugin .titlebar {
+:root.plugin .titlebar,
+:root.windows .titlebar {
   padding-left: 14px;
 }
 .app.stage-mode {

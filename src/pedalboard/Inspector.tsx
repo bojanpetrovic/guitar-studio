@@ -1,3 +1,4 @@
+import { keys } from "../platform";
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Search, Sparkles, Trash2, WandSparkles, Eraser, Keyboard, X } from "lucide-react";
 import { useStudio } from "../studio";
@@ -78,7 +79,7 @@ function KeyField({ w, board, onKey }: { w: Widget; board: Board; onKey: (code: 
       ? "Press it to stomp the switch."
       : w.type === "selector"
         ? "Press it to select this control, then ↑ / ↓ step through positions. Press it again (or Esc) to let go."
-        : "Press it to select this control, then ↑ / ↓ turn it (⇧ for bigger steps). Press it again (or Esc) to let go.";
+        : keys("Press it to select this control, then ↑ / ↓ turn it (⇧ for bigger steps). Press it again (or Esc) to let go.");
 
   return (
     <div className="insp-field">
@@ -210,7 +211,7 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
         <div className="insp-head">
           <h3>{count} controls</h3>
           <div className="row gap">
-            <button className="icon-btn ghost" title="Duplicate (⌘D)" onClick={onDuplicate}>
+            <button className="icon-btn ghost" title={keys("Duplicate (⌘D)")} onClick={onDuplicate}>
               <Copy size={14} />
             </button>
             <button className="icon-btn ghost danger" title="Delete (⌫)" onClick={onDelete}>
@@ -219,9 +220,11 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
           </div>
         </div>
         <p className="muted small hint-keys">
-          Drag any of them to move them together, or nudge them with the arrows. ⌘C / ⌘X / ⌘V copy, cut and paste
-          (onto another preset's board too), ⌘D duplicates, ⌫ deletes. ⇧-click a control to take it out of the
-          selection; select a single one to edit it.
+          {keys(
+            "Drag any of them to move them together, or nudge them with the arrows. ⌘C / ⌘X / ⌘V copy, cut and paste " +
+              "(onto another preset's board too), ⌘D duplicates, ⌫ deletes. ⇧-click a control to take it out of the " +
+              "selection; select a single one to edit it.",
+          )}
         </p>
       </aside>
     );
@@ -278,9 +281,11 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
           </button>
         )}
         <p className="muted small hint-keys">
-          Select a control to wire it up. Drag to move, pull the corner to resize, ⌫ to delete, ⌘D to duplicate, arrows to nudge.
-          ⇧-click or drag a box on the board to select several (⌘A for all), then move them together; ⌘C / ⌘V copy and
-          paste.
+          {keys(
+            "Select a control to wire it up. Drag to move, pull the corner to resize, ⌫ to delete, ⌘D to duplicate, arrows to nudge. " +
+              "⇧-click or drag a box on the board to select several (⌘A for all), then move them together; ⌘C / ⌘V copy and " +
+              "paste.",
+          )}
         </p>
       </aside>
     );
@@ -298,7 +303,7 @@ export default function Inspector({ board, selected: w, count, onChange, onDelet
       <div className="insp-head">
         <h3>{meta.name}</h3>
         <div className="row gap">
-          <button className="icon-btn ghost" title="Duplicate (⌘D)" onClick={onDuplicate}>
+          <button className="icon-btn ghost" title={keys("Duplicate (⌘D)")} onClick={onDuplicate}>
             <Copy size={14} />
           </button>
           <button className="icon-btn ghost danger" title="Delete (⌫)" onClick={onDelete}>

@@ -161,6 +161,12 @@ fn output_within(
 ) -> std::io::Result<Option<std::process::Output>> {
     use std::io::Read;
     use std::process::Stdio;
+    #[cfg(windows)]
+    {
+        // No console window flashing up for the scanner (CREATE_NO_WINDOW).
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -1,3 +1,4 @@
+import { keys } from "../platform";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -169,10 +170,10 @@ function StageHud({ onEdit, onRig }: { onEdit: () => void; onRig: () => void }) 
         <ChevronRight size={16} />
       </button>
       <span className="stage-hud-sep" />
-      <button className="btn small" onClick={onEdit} title="Edit the board (⌘E or Esc)">
+      <button className="btn small" onClick={onEdit} title={keys("Edit the board (⌘E or Esc)")}>
         <Pencil size={13} /> Edit
       </button>
-      <button className="btn small" onClick={onRig} title="Back to the rig (⌘1)">
+      <button className="btn small" onClick={onRig} title={keys("Back to the rig (⌘1)")}>
         <Workflow size={13} /> Rig
       </button>
     </div>

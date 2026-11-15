@@ -239,10 +239,16 @@ impl PluginExport for GuitarStudio {
     type Params = GuitarStudioParams;
 
     fn create() -> Self {
-        let log = std::env::var_os("HOME").map(|home| {
-            std::path::PathBuf::from(home).join("Library/Logs/Guitar Studio/plugin.log")
-        });
+        let log = if cfg!(windows) {
+            Some(gs_app::local_dir().join("logs").join("plugin.log"))
+        } else {
+            std::env::var_os("HOME").map(|home| {
+                std::path::PathBuf::from(home).join("Library/Logs/Guitar Studio/plugin.log")
+            })
+        };
         gs_app::logging::init(log.as_deref());
+        // The DAW creates plugins on its main (UI) thread.
+        gs_app::main_thread::init();
         Self {
             instance: Instance::new(),
             params: Arc::new(GuitarStudioParams::new()),

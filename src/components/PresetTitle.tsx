@@ -5,6 +5,7 @@ import { Bookmark, Save } from "lucide-react";
 import { useStudio } from "../studio";
 import { toggleSidebar } from "../sidebar";
 import { startSaveAs } from "./PresetBrowser";
+import { keys } from "../platform";
 
 export default function PresetTitle() {
   const { presets, actions } = useStudio();
@@ -28,11 +29,11 @@ export default function PresetTitle() {
 
   return (
     <div className="preset">
-      <button className="preset-trigger" onClick={() => toggleSidebar("left")} title="Presets (⌘P)">
+      <button className="preset-trigger" onClick={() => toggleSidebar("left")} title={keys("Presets (⌘P)")}>
         <Bookmark size={14} />
         <span className={`preset-name ${current ? "" : "muted"}`}>{current ?? "Untitled rig"}</span>
       </button>
-      <button className="icon-btn" onClick={save} title={current ? `Save “${current}” (⌘S)` : "Save as… (⌘S)"}>
+      <button className="icon-btn" onClick={save} title={keys(current ? `Save “${current}” (⌘S)` : "Save as… (⌘S)")}>
         <Save size={16} />
       </button>
     </div>

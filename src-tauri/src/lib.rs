@@ -77,7 +77,8 @@ async fn call_async(desktop: State<'_, Desktop>, cmd: String, args: Value) -> Cm
 
 /// Show or hide the macOS close / minimise / zoom buttons. Stage mode hides them so the
 /// window looks frameless. (We keep the native frame itself: taking decorations away
-/// makes tao's traffic-light positioning panic on the next resize.)
+/// makes tao's traffic-light positioning panic on the next resize.) Windows has no
+/// overlay title bar, so there the whole frame comes and goes.
 fn set_window_buttons(window: &tauri::WebviewWindow, visible: bool) -> CmdResult<()> {
     #[cfg(target_os = "macos")]
     {
@@ -98,13 +99,18 @@ fn set_window_buttons(window: &tauri::WebviewWindow, visible: bool) -> CmdResult
         ns.invalidateShadow();
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, visible);
+    window.set_decorations(visible).map_err(err)?;
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    gs_app::logging::init(None);
+    // A release build on Windows has no console: log to a file there.
+    let log = (cfg!(windows) && !cfg!(debug_assertions))
+        .then(|| gs_app::local_dir().join("logs").join("app.log"));
+    gs_app::logging::init(log.as_deref());
+    // Plugins load and show their editors on this thread (see `gs_app::main_thread`).
+    gs_app::main_thread::init();
     tauri::Builder::default()
         // Closing the main window quits, even with plugin editor windows still open
         // (otherwise audio and the phone server would run on, headless).

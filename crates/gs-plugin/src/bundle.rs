@@ -1,16 +1,25 @@
-//! Where the plugin is installed: its bundle holds the scanner (`Contents/MacOS`) and
-//! the UI (`Contents/Resources/ui`).
+//! Where the plugin is installed. Its bundle holds the scanner next to the plugin's
+//! binary (`Contents/MacOS`, or `Contents/x86_64-win` for the Windows VST3) and the UI
+//! in `Contents/Resources/ui`. On Windows the CLAP is a single file, so it's installed
+//! in a folder of its own with the scanner and `Resources/ui` beside it.
 
 use std::path::PathBuf;
 
-/// The folder holding this plugin's binary (`<bundle>/Contents/MacOS`).
+/// The folder holding this plugin's binary (`<bundle>/Contents/MacOS`, …).
 pub fn binary_dir() -> Option<PathBuf> {
     own_binary()?.parent().map(PathBuf::from)
 }
 
 /// The built UI (`npm run build`), copied into the bundle.
 pub fn ui_dir() -> Option<PathBuf> {
-    Some(binary_dir()?.parent()?.join("Resources").join("ui"))
+    let dir = binary_dir()?;
+    let bundled = dir.parent()?.join("Resources").join("ui");
+    let beside = dir.join("Resources").join("ui");
+    Some(if !bundled.is_dir() && beside.is_dir() {
+        beside
+    } else {
+        bundled
+    })
 }
 
 /// The path of the binary this code was loaded from (the DAW's own executable is
@@ -48,7 +57,13 @@ fn own_binary() -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes())))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn own_binary() -> Option<PathBuf> {
+    // gs-app is linked into this DLL, so its module is ours.
+    gs_app::win::module_path()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn own_binary() -> Option<PathBuf> {
     None
 }

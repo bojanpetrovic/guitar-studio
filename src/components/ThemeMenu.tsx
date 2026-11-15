@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Palette } from "lucide-react";
 import { useDismiss } from "../hooks";
 import { cycleTheme, setThemeChoice, Theme, THEMES, useTheme } from "../themes";
+import { keys } from "../platform";
 
 function Preview({ s }: { s: Theme["swatch"] }) {
   return (
@@ -51,7 +52,7 @@ export default function ThemeMenu() {
         className={`icon-btn ${open ? "active" : ""}`}
         onClick={() => setOpen((o) => !o)}
         aria-label="Theme"
-        title={`Theme: ${theme.name} (⇧⌘T to cycle)`}
+        title={keys(`Theme: ${theme.name} (⇧⌘T to cycle)`)}
       >
         <Palette size={17} />
       </button>
@@ -60,7 +61,7 @@ export default function ThemeMenu() {
         <div className="popover theme-pop">
           <div className="pop-head">
             <span className="micro-label">Theme</span>
-            <span className="muted mono">⇧⌘T</span>
+            <span className="muted mono">{keys("⇧⌘T")}</span>
           </div>
           <div className="theme-grid">
             {THEMES.map((t) => {
@@ -85,7 +86,7 @@ export default function ThemeMenu() {
           <label className="theme-system">
             <span>
               Match system appearance
-              <small>Amber when macOS is dark, Daylight when light</small>
+              <small>Amber when the system is dark, Daylight when light</small>
             </span>
             <button
               className={`switch ${system ? "on" : ""}`}

@@ -11,7 +11,7 @@ FORMAT       ?= au
 PLUGIN       ?= nolly
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev build bundle run test test-engine lint fmt fmt-check check \
+.PHONY: help install dev build bundle package run test test-engine lint fmt fmt-check check \
         plugin plugin-install plugin-uninstall plugin-test smoke preset-test param-test scene-test preset-timing params scan icons clean clean-all reset-settings
 
 help: ## Show this help
@@ -43,8 +43,16 @@ build: node_modules ## Build frontend + release binary (UI embedded, no .app bun
 	# feature, so the binary would load the dev server URL and show a blank window.
 	npm run tauri build -- --no-bundle
 
+# Tauri's (ad-hoc) signing step runs `xattr -cr`: make sure that's macOS's own xattr, not
+# a Python one an asdf / pip install put earlier on PATH (it has no -r).
+SYS_XATTR    := PATH="/usr/bin:$$PATH"
+
 bundle: node_modules ## Build the macOS .app and .dmg
-	npm run tauri build
+	$(SYS_XATTR) npm run tauri build
+
+package: node_modules plugin ## Build the macOS installer (.pkg: app + VST3 + CLAP) into target/out
+	$(SYS_XATTR) npm run tauri build -- --bundles app
+	scripts/package-mac.sh "target/release/bundle/macos/Guitar Studio.app" target/plugin target/out
 
 icons: node_modules ## Regenerate app icons from assets/app-icon.svg
 	npx tauri icon assets/app-icon.svg -o src-tauri/icons

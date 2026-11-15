@@ -15,6 +15,8 @@ pub mod logging;
 pub mod main_thread;
 pub mod presets;
 pub mod warm;
+#[cfg(windows)]
+pub mod win;
 
 use gs_engine::Studio;
 use gs_engine::audio::{self, AudioConfig};
@@ -54,14 +56,30 @@ pub trait Shell: Send + Sync + 'static {
 /// The app's data folder (presets, plugin list, settings), shared by the desktop app
 /// and the plugin. Matches the Tauri identifier in `src-tauri/tauri.conf.json`.
 pub fn default_data_dir() -> PathBuf {
-    const IDENTIFIER: &str = "dev.guitarstudio.app";
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let dir = |var: &str| std::env::var_os(var).map_or_else(|| PathBuf::from("."), PathBuf::from);
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support").join(IDENTIFIER)
+        dir("HOME")
+            .join("Library/Application Support")
+            .join(IDENTIFIER)
+    } else if cfg!(windows) {
+        // Tauri's app data folder on Windows (the roaming one).
+        dir("APPDATA").join(IDENTIFIER)
     } else {
-        home.join(".local/share").join(IDENTIFIER)
+        dir("HOME").join(".local/share").join(IDENTIFIER)
     }
 }
+
+/// Where caches and logs go: the data folder on macOS (logs: `~/Library/Logs`),
+/// `%LOCALAPPDATA%\dev.guitarstudio.app` on Windows (not roamed between computers).
+pub fn local_dir() -> PathBuf {
+    match std::env::var_os("LOCALAPPDATA") {
+        Some(local) if cfg!(windows) => PathBuf::from(local).join(IDENTIFIER),
+        _ => default_data_dir(),
+    }
+}
+
+/// The app's identifier, as in `src-tauri/tauri.conf.json`.
+pub const IDENTIFIER: &str = "dev.guitarstudio.app";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,0 +1,124 @@
+# Builds the installers: a macOS .pkg (universal: Apple silicon + Intel) and a Windows
+# setup .exe, each with the desktop app and the VST3 / CLAP plugins.
+#
+# Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) to build them and put
+# them on a draft GitHub release; publish the draft when it looks right. "Run workflow"
+# on the Actions tab builds them without a release (download them from the run).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS installer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+
+      - name: App (universal)
+        run: npx tauri build --target universal-apple-darwin --bundles app
+
+      - name: Plugin (universal)
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --target "$target" -p gs-plugin
+            cargo build --release --target "$target" -p gs-engine --bin gs-scan
+          done
+          out=target/universal-apple-darwin/release
+          mkdir -p "$out"
+          for file in libgs_plugin.dylib gs-scan; do
+            lipo -create -output "$out/$file" \
+              "target/aarch64-apple-darwin/release/$file" "target/x86_64-apple-darwin/release/$file"
+          done
+          scripts/bundle-plugin.sh "$out"
+
+      - name: Installer
+        run: |
+          scripts/package-mac.sh \
+            "target/universal-apple-darwin/release/bundle/macos/Guitar Studio.app" target/plugin out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*.pkg
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+
+      # First: the installer takes the plugins from target/plugin (tauri.windows.conf.json).
+      - name: Plugin
+        run: |
+          npm run build
+          cargo build --release -p gs-plugin
+          cargo build --release -p gs-engine --bin gs-scan
+          scripts/bundle-plugin.sh target/release
+
+      - name: App and installer
+        run: npx tauri build
+
+      - name: Collect
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          mkdir -p out
+          cp target/release/bundle/nsis/*-setup.exe "out/Guitar-Studio-$version-Windows-setup.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --draft \
+            --title "Guitar Studio ${GITHUB_REF_NAME#v}" \
+            --notes-file .github/release-notes.md

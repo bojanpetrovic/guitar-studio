@@ -3,12 +3,22 @@
 A desktop guitar studio: host VST3 / AU / CLAP plugins, patch them together freely,
 with a built-in tuner and metronome. Rust audio engine, Tauri v2 + React UI.
 
-## Run
+## Install
+
+Download the installer for your computer from the
+[Releases](https://github.com/bojanpetrovic/guitar-studio/releases) page: a `.pkg` for
+macOS 13+ (Apple silicon and Intel) or a setup `.exe` for 64-bit Windows 10 / 11. Each
+installs the desktop app and the VST3 and CLAP plugins. The builds aren't code-signed yet,
+so macOS and Windows ask once before running them. The release notes say how to get past
+that.
+
+## Run from source
 
 ```sh
 make install   # npm packages + Rust crates
 make dev       # run with hot reload
 make bundle    # release .app / .dmg
+make package   # the macOS installer (.pkg with the app and plugins), as released
 make help      # list every task
 ```
 
@@ -189,7 +199,8 @@ window is the same app: rig, pedalboard, presets and scenes all work.
   extra plugins.
 - In REAPER, turn on *Send all keyboard input to plugin* (FX window menu) to use the
   pedalboard's keyboard shortcuts.
-- The plugin logs to `~/Library/Logs/Guitar Studio/plugin.log` (`RUST_LOG=debug` for
+- The plugin logs to `~/Library/Logs/Guitar Studio/plugin.log` on macOS and
+  `%LOCALAPPDATA%\dev.guitarstudio.app\logs\plugin.log` on Windows (`RUST_LOG=debug` for
   more). `GS_PLUGIN_DEV_URL=http://localhost:1420` loads the UI from `npm run dev`
   instead of the bundle.
 - `make plugin-test PRESET="pedalboard demo"` loads the built bundles headless. It checks
@@ -254,6 +265,27 @@ and an entry in `src/themes.ts`; everything else is derived from those tokens.
   `gs_app::dispatch`. Work that needs the main thread from elsewhere uses the main
   dispatch queue (`gs_app::main_thread`), which also works inside a DAW.
 
+## Releases
+
+`.github/workflows/release.yml` builds both installers on GitHub Actions. Push a version
+tag to get them on a draft release:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+- **macOS:** a universal app (Tauri) and plugin (`lipo`), packed by
+  `scripts/package-mac.sh` into one `.pkg` with a choice per part. They are ad-hoc
+  signed only. An installer rather than a disk image means the installed files aren't
+  quarantined, so only the `.pkg` itself needs *Open Anyway*.
+- **Windows:** `scripts/bundle-plugin.sh` lays out the plugins (a VST3 bundle, and the
+  CLAP in a folder of its own beside its scanner and UI). Tauri's NSIS installer carries
+  them (`src-tauri/tauri.windows.conf.json`) and copies them to `Common Files\VST3` and
+  `Common Files\CLAP` (`src-tauri/windows/installer-hooks.nsh`).
+
+The version comes from `Cargo.toml`, `package.json` and `src-tauri/tauri.conf.json`;
+bump all three together.
+
 ## Useful dev commands
 
 ```sh
@@ -276,4 +308,6 @@ make reset-settings                     # forget the saved audio device and plug
 - Plugin delay compensation on parallel branches
 - MIDI foot-controller mapping
 - Out-of-process plugin sandboxing (scanning is already isolated)
-- Code signing and notarization. `Entitlements.plist` already has the required keys.
+- Code signing and notarization (needs an Apple Developer ID; `Entitlements.plist`
+  already has the required keys) and Windows code signing
+- ASIO on Windows (audio goes through WASAPI for now)

@@ -5,6 +5,7 @@ import { Bookmark, Check, FilePlus2, Pencil, Save, Search, Trash2 } from "lucide
 import { useStudio } from "../studio";
 import { setSidebar } from "../sidebar";
 import { timeAgo } from "../util";
+import { keys } from "../platform";
 
 type Mode =
   | { kind: "idle" }
@@ -80,7 +81,7 @@ export default function PresetBrowser() {
           <button
             className="icon-btn"
             onClick={() => setMode({ kind: "saveAs", value: current ?? "", confirmReplace: false })}
-            title="Save as… (⇧⌘S)"
+            title={keys("Save as… (⇧⌘S)")}
           >
             <Save size={16} />
           </button>
@@ -152,7 +153,7 @@ export default function PresetBrowser() {
         {presets.presets.length === 0 && (
           <div className="empty">
             <Bookmark size={26} />
-            <p>No presets yet. Build a rig, then save it with ⌘S.</p>
+            <p>{keys("No presets yet. Build a rig, then save it with ⌘S.")}</p>
           </div>
         )}
         {list.map((p) => {
